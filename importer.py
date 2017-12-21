@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """Import script
 """
 
@@ -11,41 +12,38 @@ ref_path = pjoin(mcn_dir, model_name)
 print('loading mcn model...')
 mcn = sio.loadmat(ref_path)
 
+
+def parse_struct(x):
+    """Extract nested dict data structure from matfile struct layout
+
+    Args:
+        x (ndarray): a nested, mixed type numpy array that has been
+                     loaded from a .mat file with the scipy.io.loadmat
+                     utility .
+
+    Returns:
+        nested dictionary of parsed data
+    """
+    # handle scalar base cases for recursion
+    scalar_types = [np.str_, np.uint8, np.int64, np.float32, np.float64]
+    if x.dtype.type in scalar_types:
+        return x
+    fieldnames = [tup[0] for tup in x.dtype.descr]
+    parsed = {f:[] for f in fieldnames}
+    if any([dim == 0 for dim in x.shape]):
+        return parsed # only recurse on valid storage shapes
+    if fieldnames == ['']:
+        return x[0][0] # prevent blank nesting
+    for f_idx, fname in enumerate(fieldnames):
+        x = x.flatten() # simplify logic via linear index
+        for ii in range(x.size):
+            parsed[fname].append(parse_struct(x[ii][f_idx]))
+    return parsed
+
 # sanity check
 for key in ['meta', 'params', 'layers']:
     assert key in mcn.keys()
 
-def parse_struct(x):
-    """extract nested dict from matfile struct layout
-    """
-    # handle base case
-    scalar_types = [np.str_, np.uint8, np.float32, np.float64]
-    if x.dtype.type in scalar_types:
-        return x
-        # import ipdb ; ipdb.set_trace()
-    fieldnames = [tup[0] for tup in x.dtype.descr]
-    d = {f:[] for f in fieldnames}
-    # only recurse on valid storage shapes
-    if any([dim == 0 for dim in x.shape]):
-        return d
-    # if '' in fieldnames: import ipdb ; ipdb.set_trace()
-    # print(fieldnames)
-    for f_idx, fname in enumerate(fieldnames):
-        # it = np.nditer(x, flags=['f_index', 'refs_ok', 'external_loop'])
-        # while not it.finished:
-            # elem = it[0]
-            # # (it[0], it.index)
-            # import ipdb ; ipdb.set_trace()
-            # d[fname].append(parse_struct(elem[it.index][f_idx]))
-            # d[fname].append(parse_struct(elem[it.index][f_idx]))
-        # while 
-            # d[fname].append(parse_struct(elem[0][idx]))
-        x = x.flatten() # seems safer the external looping over refs
-        for ii in range(x.size):
-        # for elem in np.nditer(x, order='F', flags=('refs_ok','external_loop')):
-            # import ipdb ; ipdb.set_trace()
-            d[fname].append(parse_struct(x[ii][f_idx]))
-    return d
-
 # meta_dict = parse_struct(mcn['meta'])
-params_dict = parse_struct(mcn['params'])
+# params_dict = parse_struct(mcn['params'])
+layers_dict = parse_struct(mcn['layers'])
