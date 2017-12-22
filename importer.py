@@ -6,11 +6,13 @@ Pooling
 
 """
 
-# import torch
+import torch
 from os.path import join as pjoin
 import torch.nn as nn
 # import numpy as np
+import functools
 import scipy.io as sio
+from torch.autograd import Variable
 # build_header
 import math
 import numpy as np
@@ -37,6 +39,7 @@ def parse_struct(x):
         nested dictionary of parsed data
     """
     # handle scalar base cases for recursion
+    # if x.shape == (1,2): import ipdb ; ipdb.set_trace()
     scalar_types = [np.str_, np.uint8, np.int64, np.float32, np.float64]
     if x.dtype.type in scalar_types:
         if x.size == 1: x = x.flatten() ; x = x[0] # flatten scalars
@@ -46,7 +49,10 @@ def parse_struct(x):
     if any([dim == 0 for dim in x.shape]):
         return parsed # only recurse on valid storage shapes
     if fieldnames == ['']:
-        return x[0][0] # prevent blank nesting
+        return [elem[0] for elem in x.flatten()] # prevent blank nesting
+        # return x[0][0]
+    # if fieldnames == [('', '|O')]: import ipdb ; ipdb.set_trace()
+    # if 'inputs' in fieldnames: import ipdb ; ipdb.set_trace()
     for f_idx, fname in enumerate(fieldnames):
         x = x.flatten() # simplify logic via linear index
         if x.size > 1:
@@ -94,34 +100,26 @@ def convert_uniform_padding(mcn_pad):
     return pad
 
 
-def build_header():
+def build_header_str(net_name):
     header = '''
 import torch
 import torch.nn as nn
 
-from functools import reduce
 from torch.autograd import Variable
 
-class LambdaBase(nn.Sequential):
-    def __init__(self, fn, *args):
-        super(LambdaBase, self).__init__(*args)
-        self.lambda_func = fn
-    def forward_prepare(self, input):
-        output = []
-        for module in self._modules.values():
-            output.append(module(input))
-        return output if output else input
-class Lambda(LambdaBase):
-    def forward(self, input):
-        return self.lambda_func(self.forward_prepare(input))
-class LambdaMap(LambdaBase):
-    def forward(self, input):
-        return list(map(self.lambda_func,self.forward_prepare(input)))
-class LambdaReduce(LambdaBase):
-    def forward(self, input):
-        return reduce(self.lambda_func,self.forward_prepare(input))
+class {0}(nn.module):
+
+    def __init__(self):
+        super().__init__()
 '''
-    return header
+    return header.format(net_name)
+
+def build_forward_str(input_vars):
+    forward_str = '''
+    def forward(self, {}):
+'''.format(input_vars)
+    return forward_str
+
 # class TorchModule(object):
     # def __init__(self, name, inputs, outputs):
 	# self.name = name
@@ -170,7 +168,7 @@ def conv2d_mod(block):
     assert len(fsize) == 4, 'expected four dimensions'
     pad,_ = convert_padding(block['pad'])
     conv_opts = {'in_channels': fsize[2], 'out_channels': fsize[3],
-                 'kernel_size': fsize[:1], 'padding': pad}
+                 'kernel_size': fsize[:2], 'padding': pad}
     return nn.Conv2d(**conv_opts)
 
 def load_mcn_net(path):
@@ -189,10 +187,21 @@ class PlaceHolder(object):
     """placeholder class for pytorch operations that are defined through
     code execution, rather than as nn modules"""
 
-    def __init__(self, name, block, block_type):
-        self.name = name
+    def __init__(self, block, block_type):
         self.block = block
         self.block_type = block_type
+
+class Concat(PlaceHolder):
+    def __call__(self, x):
+        import ipdb ; ipdb.set_trace()
+
+class Flatten(PlaceHolder):
+    def __call__(self, x):
+        import ipdb ; ipdb.set_trace()
+
+class Permute(PlaceHolder):
+    def __call__(self, x):
+        import ipdb ; ipdb.set_trace()
 
 # ['dagnn.Flatten',
          # 'dagnn.Conv',
@@ -202,22 +211,21 @@ class PlaceHolder(object):
              # 'dagnn.DropOut',
               # 'dagnn.Pooling']
 
-def extract_mcn_modules(mcn_net):
+def extract_dag(mcn_net):
     """ basic version assumes a linear chain """
-    mods = []
+    nodes = []
     num_layers = len(mcn_net['layers']['name'])
     for ii in range(num_layers):
+        node = {
+           'name': mcn_net['layers']['name'][ii],
+           'inputs': mcn_net['layers']['inputs'][ii],
+           'outputs': mcn_net['layers']['outputs'][ii],
+        }
         bt = mcn_net['layers']['type'][ii]
-        name = mcn_net['layers']['name'][ii]
         block = mcn_net['layers']['block'][ii]
+        opts = {'block': block, 'block_type': bt}
         if bt == 'dagnn.Conv':
             mod = conv2d_mod(block)
-            # fsize = int_list(block['size'])
-            # assert len(fsize) == 4, 'expected four dimensions'
-            # pad,_ = convert_padding(block['pad'])
-            # conv_opts = {'in_channels': fsize[2], 'out_channels': fsize[3],
-                         # 'kernel_size': fsize[:1], 'padding': pad}
-            # mod = nn.Conv2d(**conv_opts)
         elif bt == 'dagnn.ReLU':
             mod = nn.ReLU()
         elif bt == 'dagnn.Pooling':
@@ -234,11 +242,107 @@ def extract_mcn_modules(mcn_net):
                 raise ValueError(msg)
         elif bt == 'dagnn.DropOut': # both frameworks use p=prob(zeroed)
             mod = nn.Dropout(p=block['rate'])
-        elif bt in ['dagnn.Permute', 'dagnn.Flatten', 'dagnn.Concat']:
-            opts = {'name': name, 'block': block, 'block_type': bt}
-            mod = PlaceHolder(**opts)
-        mods += [(name, mod)]
-    return mods
+        elif bt == 'dagnn.Permute':
+            mod = Permute(**opts)
+        elif bt == 'dagnn.Flatten':
+            mod = Flatten(**opts)
+        elif bt == 'dagnn.Concat':
+            mod = Concat(**opts)
+        # elif bt in ['dagnn.Permute', 'dagnn.Flatten', 'dagnn.Concat']:
+            # import ipdb ; ipdb.set_trace()
+            # mod = PlaceHolder(**opts)
+        node['mod'] = mod
+        nodes += [node]
+    return nodes
+
+def compose(*funcs):
+    """compose a sequnce of functions into a single function
+
+    Args :
+        *funcs [iterable]: a sequence of functions
+    Return:
+        single, composite function
+    """
+    identity = lambda x: x
+    compose = lambda f, g: lambda x: f(g(x))
+    return functools.reduce(compose, funcs, identity)
+
+def cleanup(x):
+    """fix unusual spacing present in nn.module __repr__"""
+    x = x.replace('Conv2d (', 'Conv2d(')
+    return x
+
+class Network(nn.Module):
+    def __init__(self, name):
+        super().__init__()
+        self.name = name
+        self.attr_str = []
+        self.forward_str = []
+        self.input_vars = None
+        # self.data_var = 'x'
+
+    # def forward(self, x):
+        # composite = compose(self.exec_order)
+        # return composite(x)
+
+    def indenter(self, x, depth=2):
+        # print(x)
+        indent = ' ' * depth * 4
+        return indent + '{}\n'.format(x)
+        # return '{{x} <{spaces}}\n'.format(spaces=depth*4, x=x)
+
+    def add_mod(self, name, inputs, outputs, mod):
+        self.attr_str += ['self.{} = {}'.format(name, mod)]
+        outs = ','.join(outputs)
+        ins = ','.join(inputs)
+        if not self.input_vars: self.input_vars = ins
+        self.forward_str += ['{} = self.{}({})'.format(outs, name, ins)]
+
+    def transcribe(self):
+        """generate pytorch source code for the model"""
+        assert self.input_vars, 'input vars must be set before transcribing'
+        arch = build_header_str(self.name)
+        for x in self.attr_str:
+            arch += self.indenter(x, depth=2)
+        arch += build_forward_str(self.input_vars)
+        for x in self.forward_str:
+            arch += self.indenter(x, depth=2)
+        arch = cleanup(arch)
+        return arch
+
+    def __str__(self):
+        return self.transcribe()
+
+def build_network(net, nodes):
+    """ convert a list of dag nodes into an architecture description
+
+    NOTE: we can ensure a valid execution order by exploiting the provided
+    ordering of the stored network
+    """
+    # seq = []
+    for node in nodes:
+        net.add_mod(**node)
+    import ipdb ; ipdb.set_trace()
+    return net
+        # mod = node['mod']
+        # name = node['name']
+        # outputs = node['outputs']
+        # if len(node['inputs']) == 1:
+            # if isinstance(mod, PlaceHolder):
+                # import ipdb ; ipdb.set_trace()
+            # setattr(net, node['name'], node['mod'])
+            # net.exec_order.append(getattr(
+            # # forward = net.forward
+            # forward = compose(forward, mod)
+            # setattr(net, 'forward', forward)
+            # x = Variable(torch.randn(1, 3, 224, 224))
+            # res = net.forward(x)
+            # import ipdb ; ipdb.set_trace()
+            # seq = [mod] + seq
+        # else:
+            # print(net)
+            # import ipdb ; ipdb.set_trace()
+            # print(len(node['inputs']))
 
 # def mcn_to_pytorch(mcn_path,outputname=None):
     # mcn_net = load_mcn_net(mcn_path)
@@ -265,13 +369,16 @@ def extract_mcn_modules(mcn_net):
 # with open(arch_def_path, 'w') as f:
     # f.write(arch_def)
 
+# arch_def_path = 'squeezenet1_0-pt.py'
 mcn_dir = '/users/albanie/data/models/matconvnet'
 model_name = 'squeezenet1_0-pt-mcn.mat'
 mcn_path = pjoin(mcn_dir, model_name)
 print('loading mcn model...')
 # mcn = sio.loadmat(mcn_path)
 mcn_net = load_mcn_net(mcn_path)
-mods = extract_mcn_modules(mcn_net)
+nodes = extract_dag(mcn_net)
 
-arch_def_path = 'squeezenet1_0-pt.py'
+net = Network(name='squeezenet1_0')
+net = build_network(net, nodes)
 
+print(net)
