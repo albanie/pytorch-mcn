@@ -6,13 +6,11 @@ Pooling
 
 """
 
-import torch
 from os.path import join as pjoin
 import torch.nn as nn
 # import numpy as np
 import functools
 import scipy.io as sio
-from torch.autograd import Variable
 # build_header
 import math
 import numpy as np
@@ -105,8 +103,6 @@ def build_header_str(net_name):
 import torch
 import torch.nn as nn
 
-from torch.autograd import Variable
-
 class {0}(nn.module):
 
     def __init__(self):
@@ -192,16 +188,44 @@ class PlaceHolder(object):
         self.block_type = block_type
 
 class Concat(PlaceHolder):
-    def __call__(self, x):
-        import ipdb ; ipdb.set_trace()
+
+    def __repr__(self):
+        return 'torch.cat({{}}, dim={})'.format(int(self.block['dim']))
 
 class Flatten(PlaceHolder):
-    def __call__(self, x):
-        import ipdb ; ipdb.set_trace()
+
+    def __init__(self, **kwargs):
+        pass
+
+    def __repr__(self):
+        return 'torch.view({{}}.size(0), -1)'
 
 class Permute(PlaceHolder):
-    def __call__(self, x):
-        import ipdb ; ipdb.set_trace()
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.order = self.block['order'].flatten() - 1 # fix 1-indexing
+
+    def __repr__(self):
+        #TODO(samuel): add logic for higher dims
+        changes = self.order - np.arange(4)
+        error_msg = 'only two dims can be transposed at a time'
+        assert (changes == 0).sum() <= 2, error_msg
+        error_msg = 'only tranpose along first dimensions currently supported'
+        assert np.array_equal(np.where(changes != 0)[0], [0,1]), error_msg
+        dim0 = np.where(self.order == 0)[0][0]
+        dim1 = np.where(self.order == 1)[0][0]
+        return 'torch.tranpose({{}}, {}, {})'.format(dim0, dim1)
+
+class View(PlaceHolder):
+    """TODO: fix general case"""
+
+    def __init__(self, flatten=True):
+        self.flatten = flatten
+
+    def __repr__(self):
+        if not self.flatten: raise ValueError('not yet supported')
+        return '{}.view({}.size(0), -1)'
 
 # ['dagnn.Flatten',
          # 'dagnn.Conv',
@@ -279,24 +303,26 @@ class Network(nn.Module):
         self.attr_str = []
         self.forward_str = []
         self.input_vars = None
-        # self.data_var = 'x'
-
-    # def forward(self, x):
-        # composite = compose(self.exec_order)
-        # return composite(x)
+        self.barbarian = False
 
     def indenter(self, x, depth=2):
-        # print(x)
-        indent = ' ' * depth * 4
+        num_spaces = 4
+        if self.barbarian: num_spaces = 2
+        indent = ' ' * depth * num_spaces
         return indent + '{}\n'.format(x)
-        # return '{{x} <{spaces}}\n'.format(spaces=depth*4, x=x)
 
     def add_mod(self, name, inputs, outputs, mod):
-        self.attr_str += ['self.{} = {}'.format(name, mod)]
+        if not isinstance(mod, PlaceHolder):
+            self.attr_str += ['self.{} = nn.{}'.format(name, mod)]
         outs = ','.join(outputs)
         ins = ','.join(inputs)
         if not self.input_vars: self.input_vars = ins
-        self.forward_str += ['{} = self.{}({})'.format(outs, name, ins)]
+        if isinstance(mod, PlaceHolder):
+            func = str(mod).format(ins)
+            forward_str = '{} = {}'.format(outs, func)
+        else:
+            forward_str = '{} = self.{}({})'.format(outs, name, ins)
+        self.forward_str += [forward_str]
 
     def transcribe(self):
         """generate pytorch source code for the model"""
@@ -313,36 +339,45 @@ class Network(nn.Module):
     def __str__(self):
         return self.transcribe()
 
-def build_network(net, nodes):
+def simplify_dag(nodes):
+    """simplify unnecessary operations
+
+    Certain combinations of MCN operations can be simplified to a single
+    PyTorch operation.  For example, because matlab tensors are stored in
+    column major order, the common `x.view(x.size(0),-1)` function maps to
+    a combination of `Permute` and `Flatten` layers.
+
+    """
+    #TODO(samuel): clean up code
+    simplified = []
+    skip = False
+    for prev, node in zip(nodes, nodes[1:]):
+        if isinstance(node['mod'], Flatten) \
+            and isinstance(prev['mod'], Permute) \
+            and np.array_equal(prev['mod'].order, [1,0,2,3]): # perform merge
+                new_node = {'name': node['name'], 'inputs': prev['inputs'],
+                            'outputs': node['outputs'], 'mod': Flatten()}
+                simplified.append(new_node)
+                skip = True
+        elif skip:
+            skip = False
+        else:
+            simplified.append(prev)
+    return simplified
+
+def build_network(mcn_path, name):
     """ convert a list of dag nodes into an architecture description
 
     NOTE: we can ensure a valid execution order by exploiting the provided
     ordering of the stored network
     """
-    # seq = []
+    mcn_net = load_mcn_net(mcn_path)
+    nodes = extract_dag(mcn_net)
+    nodes = simplify_dag(nodes)
+    net = Network(name=name)
     for node in nodes:
         net.add_mod(**node)
-    import ipdb ; ipdb.set_trace()
     return net
-        # mod = node['mod']
-        # name = node['name']
-        # outputs = node['outputs']
-        # if len(node['inputs']) == 1:
-            # if isinstance(mod, PlaceHolder):
-                # import ipdb ; ipdb.set_trace()
-            # setattr(net, node['name'], node['mod'])
-            # net.exec_order.append(getattr(
-            # # forward = net.forward
-            # forward = compose(forward, mod)
-            # setattr(net, 'forward', forward)
-            # x = Variable(torch.randn(1, 3, 224, 224))
-            # res = net.forward(x)
-            # import ipdb ; ipdb.set_trace()
-            # seq = [mod] + seq
-        # else:
-            # print(net)
-            # import ipdb ; ipdb.set_trace()
-            # print(len(node['inputs']))
 
 # def mcn_to_pytorch(mcn_path,outputname=None):
     # mcn_net = load_mcn_net(mcn_path)
@@ -369,16 +404,17 @@ def build_network(net, nodes):
 # with open(arch_def_path, 'w') as f:
     # f.write(arch_def)
 
-# arch_def_path = 'squeezenet1_0-pt.py'
+arch_def_path = 'squeezenet1_0-pt.py'
 mcn_dir = '/users/albanie/data/models/matconvnet'
 model_name = 'squeezenet1_0-pt-mcn.mat'
 mcn_path = pjoin(mcn_dir, model_name)
 print('loading mcn model...')
+net = build_network(mcn_path, name='squeezenet1_0')
+
+with open(arch_def_path, 'w') as f:
+    f.write(str(net))
 # mcn = sio.loadmat(mcn_path)
-mcn_net = load_mcn_net(mcn_path)
-nodes = extract_dag(mcn_net)
-
-net = Network(name='squeezenet1_0')
-net = build_network(net, nodes)
-
-print(net)
+# net = Network(name='squeezenet1_0')
+# for node in nodes: net.add_mod(**node)
+# net = build_network(net, nodes)
+# print(net)
