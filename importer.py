@@ -7,9 +7,11 @@ Pooling
 """
 
 from os.path import join as pjoin
+import torch
 import torch.nn as nn
 # import numpy as np
 import functools
+from collections import OrderedDict
 import scipy.io as sio
 # build_header
 import math
@@ -116,23 +118,22 @@ def build_forward_str(input_vars):
 '''.format(input_vars)
     return forward_str
 
-# class TorchModule(object):
-    # def __init__(self, name, inputs, outputs):
-	# self.name = name
-	# self.inputs = inputs
-	# self.outputs = outputs
-	# self.params = []
-	# self.model = None
+def build_loader(net_name, weights_path):
+    loader_name = net_name.lower()
+    forward_str = '''
+def {0}(pretrained=True, **kwargs):
+	"""
+	load imported model instance
 
-# def build_conv2d(block,
-
-# class Conv2d(TorchModule):
-    # def __init__(self, name, inputs, outputs):
-	# self.name = name
-	# self.inputs = inputs
-	# self.outputs = outputs
-	# self.params = []
-	# self.model = None
+	Args:
+		pretrained (bool): If True, returns model with imported weights
+	"""
+	model = {1}()
+	if pretrained:
+		model.load_state_dict('{2}')
+	return model
+'''.format(loader_name, net_name, weights_path)
+    return forward_str
 
 def conv2d_mod(block):
     """
@@ -227,23 +228,18 @@ class View(PlaceHolder):
         if not self.flatten: raise ValueError('not yet supported')
         return '{}.view({}.size(0), -1)'
 
-# ['dagnn.Flatten',
-         # 'dagnn.Conv',
-          # 'dagnn.Concat',
-           # 'dagnn.Permute',
-            # 'dagnn.ReLU',
-             # 'dagnn.DropOut',
-              # 'dagnn.Pooling']
-
 def extract_dag(mcn_net):
     """ basic version assumes a linear chain """
     nodes = []
     num_layers = len(mcn_net['layers']['name'])
     for ii in range(num_layers):
+        params = mcn_net['layers']['params'][ii]
+        if params == {'': []}: params = None
         node = {
            'name': mcn_net['layers']['name'][ii],
            'inputs': mcn_net['layers']['inputs'][ii],
            'outputs': mcn_net['layers']['outputs'][ii],
+           'params': params,
         }
         bt = mcn_net['layers']['type'][ii]
         block = mcn_net['layers']['block'][ii]
@@ -272,9 +268,6 @@ def extract_dag(mcn_net):
             mod = Flatten(**opts)
         elif bt == 'dagnn.Concat':
             mod = Concat(**opts)
-        # elif bt in ['dagnn.Permute', 'dagnn.Flatten', 'dagnn.Concat']:
-            # import ipdb ; ipdb.set_trace()
-            # mod = PlaceHolder(**opts)
         node['mod'] = mod
         nodes += [node]
     return nodes
@@ -297,11 +290,13 @@ def cleanup(x):
     return x
 
 class Network(nn.Module):
-    def __init__(self, name):
+    def __init__(self, name, mcn_net, weights_path):
         super().__init__()
-        self.name = name
+        self.name = name.capitalize()
         self.attr_str = []
         self.forward_str = []
+        self.weights_path = weights_path
+        self.mcn_net = mcn_net
         self.input_vars = None
         self.barbarian = False
 
@@ -311,7 +306,7 @@ class Network(nn.Module):
         indent = ' ' * depth * num_spaces
         return indent + '{}\n'.format(x)
 
-    def add_mod(self, name, inputs, outputs, mod):
+    def add_mod(self, name, inputs, outputs, params, mod, state_dict):
         if not isinstance(mod, PlaceHolder):
             self.attr_str += ['self.{} = nn.{}'.format(name, mod)]
         outs = ','.join(outputs)
@@ -323,6 +318,18 @@ class Network(nn.Module):
         else:
             forward_str = '{} = self.{}({})'.format(outs, name, ins)
         self.forward_str += [forward_str]
+        # import ipdb ; ipdb.set_trace()
+        if not params: return # module has no associated params
+
+        for idx, param_name in enumerate(params):
+            if idx == 0:
+                key = '{}.weight'.format(name)
+            elif idx == 1:
+                key = '{}.bias'.format(name)
+            else:
+                raise ValueError('unexpected number of params')
+            val_idx = self.mcn_net['params']['name'].index(param_name)
+            state_dict[key] = self.mcn_net['params']['value'][val_idx]
 
     def transcribe(self):
         """generate pytorch source code for the model"""
@@ -333,6 +340,7 @@ class Network(nn.Module):
         arch += build_forward_str(self.input_vars)
         for x in self.forward_str:
             arch += self.indenter(x, depth=2)
+        arch += build_loader(self.name, self.weights_path)
         arch = cleanup(arch)
         return arch
 
@@ -356,7 +364,8 @@ def simplify_dag(nodes):
             and isinstance(prev['mod'], Permute) \
             and np.array_equal(prev['mod'].order, [1,0,2,3]): # perform merge
                 new_node = {'name': node['name'], 'inputs': prev['inputs'],
-                            'outputs': node['outputs'], 'mod': Flatten()}
+                            'outputs': node['outputs'], 'mod': Flatten(),
+                            'params': None}
                 simplified.append(new_node)
                 skip = True
         elif skip:
@@ -365,7 +374,7 @@ def simplify_dag(nodes):
             simplified.append(prev)
     return simplified
 
-def build_network(mcn_path, name):
+def build_network(mcn_path, name, weights_path):
     """ convert a list of dag nodes into an architecture description
 
     NOTE: we can ensure a valid execution order by exploiting the provided
@@ -374,47 +383,34 @@ def build_network(mcn_path, name):
     mcn_net = load_mcn_net(mcn_path)
     nodes = extract_dag(mcn_net)
     nodes = simplify_dag(nodes)
-    net = Network(name=name)
+    state_dict = OrderedDict()
+    net = Network(mcn_net=mcn_net, name=name, weights_path=weights_path)
     for node in nodes:
-        net.add_mod(**node)
-    return net
+        net.add_mod(**node, state_dict=state_dict)
+    return net, state_dict
 
-# def mcn_to_pytorch(mcn_path,outputname=None):
-    # mcn_net = load_mcn_net(mcn_path)
-    # # if type(model).__name__=='hashable_uniq_dict': mcn_net=model.model
-    # # model.gradInput = None
-    # slist = extract_mcn_modules(mcn_net)
-    # # s = simplify_source(slist)
-    # header = build_header()
-
-    # varname = t7_filename.replace('.t7','').replace('.','_').replace('-','_')
-    # s = '{}\n\n{} = {}'.format(header,varname,s[:-2])
-
-    # if not outputname: outputname = varname
-    # arch_file = '{}.py'.format(out_name)
-    # param_file = '{}.pth'.format(out_name)
-    # with open(arch_file, "w") as f:
-        # f.write(s)
-
-    # net = nn.Sequential()
-    # mcn_build_net(model,net)
-    # torch.save(net.state_dict(), outputname + '.pth')
 
 # def generate_arch():
 # with open(arch_def_path, 'w') as f:
     # f.write(arch_def)
 
-arch_def_path = 'squeezenet1_0-pt.py'
+demo_dir = '/users/albanie/coding/libs/pt/pytorch-mcn'
+demo = 'squeezenet1_0-a815701f.pth'
+demo_path = pjoin(demo_dir, demo)
 mcn_dir = '/users/albanie/data/models/matconvnet'
 model_name = 'squeezenet1_0-pt-mcn.mat'
 mcn_path = pjoin(mcn_dir, model_name)
 print('loading mcn model...')
-net = build_network(mcn_path, name='squeezenet1_0')
+dest_name = 'squeezenet1_0'
+arch_def_path = '{}.py'.format(dest_name)
+weights_path = '{}.pth'.format(dest_name)
+net, state_dict = build_network(mcn_path,
+                                name=dest_name,
+                                weights_path=weights_path)
 
 with open(arch_def_path, 'w') as f:
     f.write(str(net))
-# mcn = sio.loadmat(mcn_path)
-# net = Network(name='squeezenet1_0')
-# for node in nodes: net.add_mod(**node)
-# net = build_network(net, nodes)
+torch.save(state_dict, dest_name + '.pth')
+
+# demo = torch.load(demo_path)
 # print(net)
