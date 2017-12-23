@@ -6,15 +6,13 @@ Pooling
 
 """
 
+import math
 from os.path import join as pjoin
+from collections import OrderedDict
+
 import torch
 import torch.nn as nn
-# import numpy as np
-import functools
-from collections import OrderedDict
 import scipy.io as sio
-# build_header
-import math
 import numpy as np
 
 # clean-up:
@@ -112,7 +110,8 @@ class {0}(nn.Module):
 '''
     if debug_mode:
         header = header + '''
-        self.debug_feats = []
+        from collections import OrderedDict
+        self.debug_feats = OrderedDict()
 '''
     return header.format(net_name)
 
@@ -125,6 +124,12 @@ def build_forward_str(input_vars):
 def build_forward_debug_str(input_vars):
     forward_debug_str = '''
     def forward_debug(self, {}):
+        """ This purpose of this function is to provide an easy debugging
+        utility for the converted network.  Cloning is used to prevent in-place
+        operations from modifying feature artefacts. You can prevent the
+        generation of this function by setting `debug_mode = False` in the
+        importer tool.
+    """
 '''.format(input_vars)
     return forward_debug_str
 
@@ -175,7 +180,7 @@ def conv2d_mod(block):
     fsize = int_list(block['size'])
     stride = tuple(int_list(block['stride']))
     assert len(fsize) == 4, 'expected four dimensions'
-    pad,_ = convert_padding(block['pad'])
+    pad, _ = convert_padding(block['pad'])
     conv_opts = {'in_channels': fsize[2], 'out_channels': fsize[3],
                  'kernel_size': fsize[:2], 'padding': pad, 'stride': stride}
     return nn.Conv2d(**conv_opts)
@@ -204,7 +209,7 @@ class Concat(PlaceHolder):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        mcn_order = [4,3,1,2] # transform cat dimension
+        mcn_order = [4, 3, 1, 2] # transform cat dimension
         self.dim = mcn_order.index(int(self.block['dim']))
 
     def __repr__(self):
@@ -213,7 +218,7 @@ class Concat(PlaceHolder):
 class Flatten(PlaceHolder):
 
     def __init__(self, **kwargs):
-        pass
+        pass # avoid calling super
 
     def __repr__(self):
         return '{0}.view({0}.size(0), -1)'
@@ -230,20 +235,10 @@ class Permute(PlaceHolder):
         error_msg = 'only two dims can be transposed at a time'
         assert (changes == 0).sum() <= 2, error_msg
         error_msg = 'only tranpose along first dimensions currently supported'
-        assert np.array_equal(np.where(changes != 0)[0], [0,1]), error_msg
+        assert np.array_equal(np.where(changes != 0)[0], [0, 1]), error_msg
         dim0 = np.where(self.order == 0)[0][0]
         dim1 = np.where(self.order == 1)[0][0]
         return 'torch.tranpose({{}}, {}, {})'.format(dim0, dim1)
-
-# class View(PlaceHolder):
-    # """TODO: fix general case"""
-
-    # def __init__(self, flatten=True):
-        # self.flatten = flatten
-
-    # def __repr__(self):
-        # if not self.flatten: raise ValueError('not yet supported')
-        # return '{}.view({}.size(0), -1)'
 
 def extract_dag(mcn_net):
     """ basic version assumes a linear chain """
@@ -253,10 +248,10 @@ def extract_dag(mcn_net):
         params = mcn_net['layers']['params'][ii]
         if params == {'': []}: params = None
         node = {
-           'name': mcn_net['layers']['name'][ii],
-           'inputs': mcn_net['layers']['inputs'][ii],
-           'outputs': mcn_net['layers']['outputs'][ii],
-           'params': params,
+            'name': mcn_net['layers']['name'][ii],
+            'inputs': mcn_net['layers']['inputs'][ii],
+            'outputs': mcn_net['layers']['outputs'][ii],
+            'params': params,
         }
         bt = mcn_net['layers']['type'][ii]
         block = mcn_net['layers']['block'][ii]
@@ -289,18 +284,6 @@ def extract_dag(mcn_net):
         nodes += [node]
     return nodes
 
-def compose(*funcs):
-    """compose a sequnce of functions into a single function
-
-    Args :
-        *funcs [iterable]: a sequence of functions
-    Return:
-        single, composite function
-    """
-    identity = lambda x: x
-    compose = lambda f, g: lambda x: f(g(x))
-    return functools.reduce(compose, funcs, identity)
-
 def cleanup(x):
     """fix unusual spacing present in nn.Module __repr__"""
     x = x.replace('Conv2d (', 'Conv2d(')
@@ -310,11 +293,28 @@ def weights2tensor(x):
     """ adjust memory layout and load as torch tensor
     """
     if x.ndim == 4:
-        x = x.transpose((3,2,0,1))
+        x = x.transpose((3, 2, 0, 1))
     elif x.ndim == 2:
         if x.shape[1] == 1:
             x = x.flatten()
     return torch.from_numpy(x)
+
+def ensure_compatible_repr(mod):
+    """Fix minor bug in __repr__ function for MaxPool2d (present in older
+    PyTorch versions)
+
+    Args:
+        mod (nn.Module): candidate module
+
+    Returns:
+        (str): modified, compatible __repr__ string for module
+    """
+    repr_str = str(mod)
+    if isinstance(mod, nn.MaxPool2d):
+        if not 'ceil_mode' in repr_str: # string manipulation to fix bug
+            assert repr_str[-2:] == '))', 'unexpected repr format'
+            repr_str = repr_str[:-1] + ', ceil_mode={})'.format(mod.ceil_mode)
+    return repr_str
 
 class Network(nn.Module):
     def __init__(self, name, mcn_net, debug_mode=True):
@@ -322,11 +322,11 @@ class Network(nn.Module):
         self.name = name.capitalize()
         self.attr_str = []
         self.forward_str = []
-        self.forward_debug_str = []
-        self.debug_mode = debug_mode
         self.mcn_net = mcn_net
         self.input_vars = None
         self.output_vars = None
+        self.forward_debug_str = []
+        self.debug_mode = debug_mode
 
     def indenter(self, x, depth=2):
         num_spaces = 4
@@ -338,7 +338,8 @@ class Network(nn.Module):
 
     def add_mod(self, name, inputs, outputs, params, mod, state_dict):
         if not isinstance(mod, PlaceHolder):
-            self.attr_str += ['self.{} = nn.{}'.format(name, mod)]
+            mod_str = ensure_compatible_repr(mod)
+            self.attr_str += ['self.{} = nn.{}'.format(name, mod_str)]
         outs = ','.join(outputs)
         ins = ','.join(inputs)
         if not self.input_vars: self.input_vars = ins
@@ -351,7 +352,8 @@ class Network(nn.Module):
         self.forward_str += [forward_str]
         if self.debug_mode:
             self.forward_debug_str += [forward_str]
-            forward_debug_str = 'self.debug_feats[{0}] = {0}'.format(outs)
+            template = "self.debug_feats['{0}'] = torch.clone({0})"
+            forward_debug_str = template.format(outs)
             self.forward_debug_str += [forward_debug_str]
 
         if not params: return # module has no associated params
@@ -376,6 +378,7 @@ class Network(nn.Module):
         for x in self.forward_str:
             arch += self.indenter(x, depth)
         arch += self.indenter(self.forward_return(), depth)
+        arch += build_forward_debug_str(self.input_vars)
         if self.debug_mode:
             for x in self.forward_debug_str:
                 arch += self.indenter(x, depth)
@@ -401,12 +404,12 @@ def simplify_dag(nodes):
     for prev, node in zip(nodes, nodes[1:]):
         if isinstance(node['mod'], Flatten) \
             and isinstance(prev['mod'], Permute) \
-            and np.array_equal(prev['mod'].order, [1,0,2,3]): # perform merge
-                new_node = {'name': node['name'], 'inputs': prev['inputs'],
-                            'outputs': node['outputs'], 'mod': Flatten(),
-                            'params': None}
-                simplified.append(new_node)
-                skip = True
+            and np.array_equal(prev['mod'].order, [1, 0, 2, 3]): # perform merge
+            new_node = {'name': node['name'], 'inputs': prev['inputs'],
+                        'outputs': node['outputs'], 'mod': Flatten(),
+                        'params': None}
+            simplified.append(new_node)
+            skip = True
         elif skip:
             skip = False
         else:
@@ -433,7 +436,6 @@ def build_network(mcn_path, name, debug_mode):
 # with open(arch_def_path, 'w') as f:
     # f.write(arch_def)
 
-debug_mode = True
 demo_dir = '/users/albanie/coding/libs/pt/pytorch-mcn'
 demo = 'squeezenet1_0-a815701f.pth'
 demo_path = pjoin(demo_dir, demo)
@@ -444,7 +446,7 @@ print('loading mcn model...')
 dest_name = 'squeezenet1_0'
 arch_def_path = 'models/{}.py'.format(dest_name)
 weights_path = 'weights/{}.pth'.format(dest_name)
-net, state_dict = build_network(mcn_path, name=dest_name, debug_mode=debug_mode)
+net, state_dict = build_network(mcn_path, name=dest_name, debug_mode=True)
 
 with open(arch_def_path, 'w') as f:
     f.write(str(net))

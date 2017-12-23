@@ -19,12 +19,12 @@ x = Variable(torch.randn((1,3,224,224)))
 net1.eval()
 net2.eval()
 
-y1 = net1(x)
+# y1 = net1(x)
+y1 = net1.forward_debug(x)
 y2 = net2(x)
 
 params1 = list(net1.parameters())
 params2 = list(net2.parameters())
-
 
 for p1, p2 in zip(params1, params2):
     s1 = p1.size()
