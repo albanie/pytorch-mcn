@@ -24,67 +24,23 @@ import scipy.io as sio
 import numpy as np
 
 import ptmcn_utils as pmu
-# clean-up:
-# from utils import int_list, convert_padding, parse_struct
-
-def build_header_str(net_name, debug_mode):
-    header = '''
-import torch
-import torch.nn as nn
-
-class {0}(nn.Module):
-
-    def __init__(self):
-        super().__init__()
-'''
-    if debug_mode:
-        header = header + '''
-        from collections import OrderedDict
-        self.debug_feats = OrderedDict()
-'''
-    return header.format(net_name)
-
-def build_forward_str(input_vars):
-    forward_str = '''
-    def forward(self, {}):
-'''.format(input_vars)
-    return forward_str
-
-def build_forward_debug_str(input_vars):
-    forward_debug_str = '''
-    def forward_debug(self, {}):
-        """ This purpose of this function is to provide an easy debugging
-        utility for the converted network.  Cloning is used to prevent in-place
-        operations from modifying feature artefacts. You can prevent the
-        generation of this function by setting `debug_mode = False` in the
-        importer tool.
-    """
-'''.format(input_vars)
-    return forward_debug_str
-
-def build_loader(net_name):
-    loader_name = net_name.lower()
-    forward_str = '''
-def {0}(weights_path=None, **kwargs):
-    """
-    load imported model instance
-
-    Args:
-        weights_path (str): If set, loads model weights from the given path
-    """
-    model = {1}()
-    if weights_path:
-        state_dict = torch.load(weights_path)
-        model.load_state_dict(state_dict)
-    return model
-'''.format(loader_name, net_name)
-    return forward_str
 
 def load_mcn_net(path):
+    """Load matconvnet network into Python dict
+
+    By default, loading from a `.mat` file directly in Python produces
+    a complicated ndarray structure.  This function constructs a simpler
+    representation of the network for processing.
+
+    Args:
+        path (str): the path to the stored matconvnet network
+
+    Returns:
+        (dict): a native Python dictionary containg the network parameters,
+        layers and meta information.
+    """
     mcn = sio.loadmat(path)
-    # sanity check
-    for key in ['meta', 'params', 'layers']:
-        assert key in mcn.keys()
+    for key in ['meta', 'params', 'layers']: assert key in mcn.keys()
     mcn_net = {
         'meta': pmu.parse_struct(mcn['meta']),
         'params': pmu.parse_struct(mcn['params']),
@@ -136,14 +92,18 @@ def extract_dag(mcn_net):
         nodes += [node]
     return nodes
 
-def cleanup(x):
-    """fix unusual spacing present in nn.Module __repr__"""
-    x = x.replace('Conv2d (', 'Conv2d(')
-    return x
+# def cleanup(repr_):
+    # """fix unusual spacing present in nn.Module __repr__
+    
+    # Args:
+        
+    # """
+    # return x
 
 def ensure_compatible_repr(mod):
-    """Fix minor bug in __repr__ function for MaxPool2d (present in older
-    PyTorch versions)
+    """Fixes minor bug in __repr__ function for MaxPool2d (present in older
+    PyTorch versions). This function also ensures more consistent repr str
+    spacing.
 
     Args:
         mod (nn.Module): candidate module
@@ -152,6 +112,7 @@ def ensure_compatible_repr(mod):
         (str): modified, compatible __repr__ string for module
     """
     repr_str = str(mod)
+    repr_str = repr_str.replace('Conv2d (', 'Conv2d(') # fix spacing issue
     if isinstance(mod, nn.MaxPool2d):
         if not 'ceil_mode' in repr_str: # string manipulation to fix bug
             assert repr_str[-2:] == '))', 'unexpected repr format'
@@ -213,32 +174,40 @@ class Network(nn.Module):
     def transcribe(self, depth=2):
         """generate pytorch source code for the model"""
         assert self.input_vars, 'input vars must be set before transcribing'
-        arch = build_header_str(self.name, self.debug_mode)
+        arch = pmu.build_header_str(self.name, self.debug_mode)
         for x in self.attr_str:
             arch += self.indenter(x, depth)
-        arch += build_forward_str(self.input_vars)
+        arch += pmu.build_forward_str(self.input_vars)
         for x in self.forward_str:
             arch += self.indenter(x, depth)
         arch += self.indenter(self.forward_return(), depth)
-        arch += build_forward_debug_str(self.input_vars)
+        arch += pmu.build_forward_debug_str(self.input_vars)
         if self.debug_mode:
             for x in self.forward_debug_str:
                 arch += self.indenter(x, depth)
-        arch += build_loader(self.name)
-        arch = cleanup(arch)
+        arch += pmu.build_loader(self.name)
+        # arch = cleanup(arch)
         return arch
 
     def __str__(self):
         return self.transcribe()
 
 def simplify_dag(nodes):
-    """simplify unnecessary operations
+    """Simplify unnecessary chains of operations
 
     Certain combinations of MCN operations can be simplified to a single
     PyTorch operation.  For example, because matlab tensors are stored in
     column major order, the common `x.view(x.size(0),-1)` function maps to
     a combination of `Permute` and `Flatten` layers.
 
+    Args:
+        nodes (List): A directed acyclic network, represented as a list
+        of nodes, where each node is a dict containing layer attributes and
+        pointers to its parents and children.
+
+    Returns:
+        (List): a list of nodes, in which a subset of the operations have
+        been simplified.
     """
     #TODO(samuel): clean up code
     simplified = []
@@ -259,10 +228,22 @@ def simplify_dag(nodes):
     return simplified
 
 def build_network(mcn_path, name, debug_mode):
-    """ convert a list of dag nodes into an architecture description
+    """Convert a list of dag nodes into an architecture description
 
-    NOTE: we can ensure a valid execution order by exploiting the provided
-    ordering of the stored network
+    NOTE: We can ensure a valid execution order by exploiting the provided
+    ordering of the stored network.
+
+    Args:
+        mcn_path (str): the path to the .mat file containing the matconvnet
+        network to be converted.
+        name (str): the name that will be given to the converted network.
+        debug_mode (bool): If enabled, will generate additional source code
+        that makes it easy to compute intermediate network features.
+
+    Returns:
+        (str, dict): A string comprising the generated source code for the
+        network description, and a dictionary containing the associated
+        netowrk parameters.
     """
     mcn_net = load_mcn_net(mcn_path)
     nodes = extract_dag(mcn_net)

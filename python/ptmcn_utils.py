@@ -15,7 +15,6 @@ import torch.nn as nn
 def conv2d_mod(block):
     """Build a torch conv2d module from a matconvnet convolutional block
 
-    NOTES:
     PyTorch and Matconvnet use similar padding conventions for convolution.
     For the description below, assume that a convolutional block has input `X`,
     filters `f` biases `b` and output `Y` with dimensions as follows:
@@ -36,6 +35,13 @@ def conv2d_mod(block):
     P_W = 2 * P[1].  In MCN, the padding can be an array of four numbers, so
     that P_H = P[0] + P[1] and  P_W = P[2] + P[3] (here P has the format
     [TOP BOTTOM LEFT RIGHT]).
+
+    Args:
+        block (dict): a dictionary of mcn layer block attributes, parsed
+        from the stored network .mat file.
+
+    Returns:
+        nn.Conv2d : the corresponding PyTorch convolutional module
     """
     fsize = int_list(block['size'])
     stride = tuple(int_list(block['stride']))
@@ -173,7 +179,6 @@ class Flatten(PlaceHolder):
     def __repr__(self):
         return '{0}.view({0}.size(0), -1)'
 
-
 class Permute(PlaceHolder):
     """A class that represents the torch.tranpose() operation"""
 
@@ -209,3 +214,66 @@ def weights2tensor(x):
         if x.shape[1] == 1:
             x = x.flatten()
     return torch.from_numpy(x)
+
+def build_header_str(net_name, debug_mode):
+    """Generate source code header - constructs the header source
+    code for the network definition file.
+
+    Args:
+        net_name (str): name of the network architecture
+        debug_mode (bool): whether to generate additional debugging code
+
+    Returns:
+        (str) : source code header string.
+    """
+    header = '''
+import torch
+import torch.nn as nn
+
+class {0}(nn.Module):
+
+    def __init__(self):
+        super().__init__()
+'''
+    if debug_mode:
+        header = header + '''
+        from collections import OrderedDict
+        self.debug_feats = OrderedDict()
+'''
+    return header.format(net_name)
+
+def build_forward_str(input_vars):
+    forward_str = '''
+    def forward(self, {}):
+'''.format(input_vars)
+    return forward_str
+
+def build_forward_debug_str(input_vars):
+    forward_debug_str = '''
+    def forward_debug(self, {}):
+        """ This purpose of this function is to provide an easy debugging
+        utility for the converted network.  Cloning is used to prevent in-place
+        operations from modifying feature artefacts. You can prevent the
+        generation of this function by setting `debug_mode = False` in the
+        importer tool.
+    """
+'''.format(input_vars)
+    return forward_debug_str
+
+def build_loader(net_name):
+    loader_name = net_name.lower()
+    forward_str = '''
+def {0}(weights_path=None, **kwargs):
+    """
+    load imported model instance
+
+    Args:
+        weights_path (str): If set, loads model weights from the given path
+    """
+    model = {1}()
+    if weights_path:
+        state_dict = torch.load(weights_path)
+        model.load_state_dict(state_dict)
+    return model
+'''.format(loader_name, net_name)
+    return forward_str
