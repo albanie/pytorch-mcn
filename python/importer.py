@@ -1,12 +1,20 @@
 # -*- coding: utf-8 -*-
-"""Import script
+"""MatConvNet Importer module
 
-Pooling
----
+The module contains methods to convert MatConvNet models (stored in either
+the `simplenn` or `dagnn` formats) into PyTorch models. The model conversion
+consists of two stages:
+  (1) source code generation - a python file is generated containing the
+      the network definition
+  (2) state_dict construction - a dictionary of network weights that accompany
+      the network defintion is stored to disk
 
+-----------------------------------------------------------
+Licensed under The MIT License [see LICENSE.md for details]
+Copyright (C) 2017 Samuel Albanie
+-----------------------------------------------------------
 """
 
-import math
 from os.path import join as pjoin
 from collections import OrderedDict
 
@@ -15,88 +23,9 @@ import torch.nn as nn
 import scipy.io as sio
 import numpy as np
 
+import ptmcn_utils as pmu
 # clean-up:
 # from utils import int_list, convert_padding, parse_struct
-
-def parse_struct(x):
-    """Extract nested dict data structure from matfile struct layout
-
-    When matlab data structures are loaded into python from .mat files
-    via the `scipy.io.loadmat` utility, it can be slightly awkward to
-    process the resulting numpy array. To maintain consistency with
-    matlab structs, the loader uses a significant level of nesting and
-    dimension insertion. This function aims to simplify this data structure
-    into a native python dict, minimising the nesting depth where possible
-    and flattening excess dimensions.
-
-    Args:
-        x (ndarray): a nested, mixed type numpy array that has been
-                     loaded from a .mat file with the scipy.io.loadmat
-                     utility.
-    Returns:
-        nested dictionary of parsed data
-    """
-    # handle scalar base cases for recursion
-    # if x.shape == (1,2): import ipdb ; ipdb.set_trace()
-    scalar_types = [np.str_, np.uint8, np.int64, np.float32, np.float64]
-    if x.dtype.type in scalar_types:
-        if x.size == 1: x = x.flatten() ; x = x[0] # flatten scalars
-        return x
-    fieldnames = [tup[0] for tup in x.dtype.descr]
-    parsed = {f:[] for f in fieldnames}
-    if any([dim == 0 for dim in x.shape]):
-        return parsed # only recurse on valid storage shapes
-    if fieldnames == ['']:
-        return [elem[0] for elem in x.flatten()] # prevent blank nesting
-        # return x[0][0]
-    # if fieldnames == [('', '|O')]: import ipdb ; ipdb.set_trace()
-    # if 'inputs' in fieldnames: import ipdb ; ipdb.set_trace()
-    for f_idx, fname in enumerate(fieldnames):
-        x = x.flatten() # simplify logic via linear index
-        if x.size > 1:
-            for ii in range(x.size):
-                parsed[fname].append(parse_struct(x[ii][f_idx]))
-        else:
-            parsed[fname] = parse_struct(x[0][f_idx])
-    return parsed
-
-def int_list(x):
-    """As a general rule, pytorch constructors do not accepted numpy integer
-    types as arguments.  It is therefore often easier to convert small
-    numpy arrays (typically those corresponding to layer options) to native
-    lists of Ints
-    """
-    if len(x.shape) > 1:
-        assert sorted(x.shape)[-2] <= 1, 'invalid for multidim arrays'
-    return x.flatten().astype(int).tolist()
-
-def convert_padding(mcn_pad):
-    """convert padding to pytorch padding conventions
-    NOTE: mcn padding convention is [TOP BOTTOM LEFT RIGHT]
-    """
-    mcn_pad = int_list(mcn_pad)
-    if mcn_pad[0] == mcn_pad[1] and mcn_pad[2] == mcn_pad[3]:
-        pad = convert_uniform_padding(mcn_pad)
-        ceil_mode = False
-    else:
-        assert math.fabs(mcn_pad[0] - mcn_pad[1]) <= 1, 'cannot be resolved'
-        assert math.fabs(mcn_pad[2] - mcn_pad[3]) <= 1, 'cannot be resolved'
-        pad = (min(mcn_pad[:2]), min(mcn_pad[2:]))
-        ceil_mode = True
-    return pad, ceil_mode
-
-def convert_uniform_padding(mcn_pad):
-    """convert uniform mcn padding to pytorch pooling padding conventions
-    """
-    assert len(mcn_pad) == 4
-    assert mcn_pad[0] == mcn_pad[1], 'padding must be symmetric'
-    assert mcn_pad[2] == mcn_pad[3], 'padding must be symmetric'
-    if np.unique(mcn_pad).size == 1:
-        pad = mcn_pad[0]
-    else:
-        pad = mcn_pad[:2]
-    return pad
-
 
 def build_header_str(net_name, debug_mode):
     header = '''
@@ -151,94 +80,17 @@ def {0}(weights_path=None, **kwargs):
 '''.format(loader_name, net_name)
     return forward_str
 
-def conv2d_mod(block):
-    """
-    build a torch conv2d module from a matconvnet convolutional block
-
-    NOTES:
-    PyTorch and Matconvnet use similar padding conventions for convolution.
-    For the description below, assume that a convolutional block has input `X`,
-    filters `f` biases `b` and output `Y` with dimensions as follows:
-        X: H x W x D
-        f: H' x W' x D x D''
-        b: D'' x 1
-        Y: H'' x W'' x D''
-    Both Matconvnet and PyTorch compute "valid" convolutions - they only
-    produce outputs at locations which possess complete filter support in the
-    input.
-
-    Assuming the filters have dilation [DIL_Y DIL_X], then the output size for
-    both frameworks is given by
-    H'' = 1 + floor((H - DIL_Y * (H'-1) + P_H)/S[0])
-    W'' = 1 + floor((W - DIL_X * (W'-1) + P_W)/S[1])
-
-    In PT, the padding P is a tuple of two numbers, so that P_H = 2 * P[0] and
-    P_W = 2 * P[1].  In MCN, the padding can be an array of four numbers, so
-    that P_H = P[0] + P[1] and  P_W = P[2] + P[3] (here P has the format
-    [TOP BOTTOM LEFT RIGHT]).
-    """
-    fsize = int_list(block['size'])
-    stride = tuple(int_list(block['stride']))
-    assert len(fsize) == 4, 'expected four dimensions'
-    pad, _ = convert_padding(block['pad'])
-    conv_opts = {'in_channels': fsize[2], 'out_channels': fsize[3],
-                 'kernel_size': fsize[:2], 'padding': pad, 'stride': stride}
-    return nn.Conv2d(**conv_opts)
-
 def load_mcn_net(path):
     mcn = sio.loadmat(path)
     # sanity check
     for key in ['meta', 'params', 'layers']:
         assert key in mcn.keys()
     mcn_net = {
-        'meta': parse_struct(mcn['meta']),
-        'params': parse_struct(mcn['params']),
-        'layers': parse_struct(mcn['layers']),
+        'meta': pmu.parse_struct(mcn['meta']),
+        'params': pmu.parse_struct(mcn['params']),
+        'layers': pmu.parse_struct(mcn['layers']),
     }
     return mcn_net
-
-class PlaceHolder(object):
-    """placeholder class for pytorch operations that are defined through
-    code execution, rather than as nn modules"""
-
-    def __init__(self, block, block_type):
-        self.block = block
-        self.block_type = block_type
-
-class Concat(PlaceHolder):
-
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        mcn_order = [4, 3, 1, 2] # transform cat dimension
-        self.dim = mcn_order.index(int(self.block['dim']))
-
-    def __repr__(self):
-        return 'torch.cat(({{}}), dim={})'.format(self.dim)
-
-class Flatten(PlaceHolder):
-
-    def __init__(self, **kwargs):
-        pass # avoid calling super
-
-    def __repr__(self):
-        return '{0}.view({0}.size(0), -1)'
-
-class Permute(PlaceHolder):
-
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.order = self.block['order'].flatten() - 1 # fix 1-indexing
-
-    def __repr__(self):
-        #TODO(samuel): add logic for higher dims
-        changes = self.order - np.arange(4)
-        error_msg = 'only two dims can be transposed at a time'
-        assert (changes == 0).sum() <= 2, error_msg
-        error_msg = 'only tranpose along first dimensions currently supported'
-        assert np.array_equal(np.where(changes != 0)[0], [0, 1]), error_msg
-        dim0 = np.where(self.order == 0)[0][0]
-        dim1 = np.where(self.order == 1)[0][0]
-        return 'torch.tranpose({{}}, {}, {})'.format(dim0, dim1)
 
 def extract_dag(mcn_net):
     """ basic version assumes a linear chain """
@@ -257,13 +109,13 @@ def extract_dag(mcn_net):
         block = mcn_net['layers']['block'][ii]
         opts = {'block': block, 'block_type': bt}
         if bt == 'dagnn.Conv':
-            mod = conv2d_mod(block)
+            mod = pmu.conv2d_mod(block)
         elif bt == 'dagnn.ReLU':
             mod = nn.ReLU()
         elif bt == 'dagnn.Pooling':
-            pad, ceil_mode = convert_padding(block['pad'])
-            pool_opts = {'kernel_size': int_list(block['poolSize']),
-                         'stride': int_list(block['stride']),
+            pad, ceil_mode = pmu.convert_padding(block['pad'])
+            pool_opts = {'kernel_size': pmu.int_list(block['poolSize']),
+                         'stride': pmu.int_list(block['stride']),
                          'padding': pad, 'ceil_mode': ceil_mode}
             if block['method'] == 'avg':
                 mod = nn.AvgPool2d(**pool_opts)
@@ -275,11 +127,11 @@ def extract_dag(mcn_net):
         elif bt == 'dagnn.DropOut': # both frameworks use p=prob(zeroed)
             mod = nn.Dropout(p=block['rate'])
         elif bt == 'dagnn.Permute':
-            mod = Permute(**opts)
+            mod = pmu.Permute(**opts)
         elif bt == 'dagnn.Flatten':
-            mod = Flatten(**opts)
+            mod = pmu.Flatten(**opts)
         elif bt == 'dagnn.Concat':
-            mod = Concat(**opts)
+            mod = pmu.Concat(**opts)
         node['mod'] = mod
         nodes += [node]
     return nodes
@@ -288,16 +140,6 @@ def cleanup(x):
     """fix unusual spacing present in nn.Module __repr__"""
     x = x.replace('Conv2d (', 'Conv2d(')
     return x
-
-def weights2tensor(x):
-    """ adjust memory layout and load as torch tensor
-    """
-    if x.ndim == 4:
-        x = x.transpose((3, 2, 0, 1))
-    elif x.ndim == 2:
-        if x.shape[1] == 1:
-            x = x.flatten()
-    return torch.from_numpy(x)
 
 def ensure_compatible_repr(mod):
     """Fix minor bug in __repr__ function for MaxPool2d (present in older
@@ -337,14 +179,14 @@ class Network(nn.Module):
         return 'return {}'.format(self.output_vars)
 
     def add_mod(self, name, inputs, outputs, params, mod, state_dict):
-        if not isinstance(mod, PlaceHolder):
+        if not isinstance(mod, pmu.PlaceHolder):
             mod_str = ensure_compatible_repr(mod)
             self.attr_str += ['self.{} = nn.{}'.format(name, mod_str)]
         outs = ','.join(outputs)
         ins = ','.join(inputs)
         if not self.input_vars: self.input_vars = ins
         self.output_vars = outs
-        if isinstance(mod, PlaceHolder):
+        if isinstance(mod, pmu.PlaceHolder):
             func = str(mod).format(ins)
             forward_str = '{} = {}'.format(outs, func)
         else:
@@ -366,7 +208,7 @@ class Network(nn.Module):
                 raise ValueError('unexpected number of params')
             val_idx = self.mcn_net['params']['name'].index(param_name)
             weights = self.mcn_net['params']['value'][val_idx]
-            state_dict[key] = weights2tensor(weights)
+            state_dict[key] = pmu.weights2tensor(weights)
 
     def transcribe(self, depth=2):
         """generate pytorch source code for the model"""
@@ -402,11 +244,11 @@ def simplify_dag(nodes):
     simplified = []
     skip = False
     for prev, node in zip(nodes, nodes[1:]):
-        if isinstance(node['mod'], Flatten) \
-            and isinstance(prev['mod'], Permute) \
+        if isinstance(node['mod'], pmu.Flatten) \
+            and isinstance(prev['mod'], pmu.Permute) \
             and np.array_equal(prev['mod'].order, [1, 0, 2, 3]): # perform merge
             new_node = {'name': node['name'], 'inputs': prev['inputs'],
-                        'outputs': node['outputs'], 'mod': Flatten(),
+                        'outputs': node['outputs'], 'mod': pmu.Flatten(),
                         'params': None}
             simplified.append(new_node)
             skip = True
@@ -431,11 +273,6 @@ def build_network(mcn_path, name, debug_mode):
         net.add_mod(**node, state_dict=state_dict)
     return net, state_dict
 
-
-# def generate_arch():
-# with open(arch_def_path, 'w') as f:
-    # f.write(arch_def)
-
 demo_dir = '/users/albanie/coding/libs/pt/pytorch-mcn'
 demo = 'squeezenet1_0-a815701f.pth'
 demo_path = pjoin(demo_dir, demo)
@@ -451,6 +288,3 @@ net, state_dict = build_network(mcn_path, name=dest_name, debug_mode=True)
 with open(arch_def_path, 'w') as f:
     f.write(str(net))
 torch.save(state_dict, weights_path)
-
-# demo = torch.load(demo_path)
-# print(net)
