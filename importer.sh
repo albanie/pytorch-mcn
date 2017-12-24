@@ -12,7 +12,7 @@ refresh_models=true
 debug_mode=true
 use_ipython=true
 mcn_import_dir="~/data/models/matconvnet"
-output_dir="~/data/models/pytorch/mcn-imports"
+output_dir="~/data/models/pytorch/mcn_imports"
 
 # Declare list of models to be imported (uncomment selection to run)
 declare -a model_list=("squeezenet1_0-pt-mcn")

@@ -1,7 +1,8 @@
 function featureDumper(varargin)
 %FEATUREDUMPER - dump intermediate network features
 %   FEATUREDUMPER computes and stores intermediate network features for a
-%   given set of matconvnet networks.
+%   given set of matconvnet networks. Note that the name of the model is
+%   sanitized to work with Python, by replacing hyphens with underscores.
 %
 %   FEATUREDUMPER(..., 'option', value, ...) accepts the following
 %   options:
@@ -26,7 +27,8 @@ function featureDumper(varargin)
   for ii = 1:numel(opts.modelNames)
     modelName = opts.modelNames{ii} ;
     modelPath = fullfile(opts.modelDir, sprintf('%s.mat', modelName)) ;
-    featPath = fullfile(opts.featDir, sprintf('%s-feats.mat', modelName)) ;
+    featFile = sprintf('%s-feats.mat', strrep(modelName, '-', '_')) ;
+    featPath = fullfile(opts.featDir, featFile) ;
     generateFeats(modelPath, featPath) ;
   end
 

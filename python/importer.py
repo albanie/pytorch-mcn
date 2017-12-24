@@ -157,7 +157,7 @@ class Network(nn.Module):
         self.forward_str += [forward_str]
         if self.debug_mode:
             self.forward_debug_str += [forward_str]
-            template = "self.debug_feats['{0}'] = torch.clone({0})"
+            template = "self.debug_feats['{0}'] = {0}.clone()"
             forward_debug_str = template.format(outs)
             self.forward_debug_str += [forward_debug_str]
 
