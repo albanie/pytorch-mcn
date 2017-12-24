@@ -183,8 +183,8 @@ class Network(nn.Module):
         for x in self.forward_str:
             arch += self.indenter(x, depth)
         arch += self.indenter(self.forward_return(), depth)
-        arch += sg.build_forward_debug_str(self.input_vars)
         if self.debug_mode:
+            arch += sg.build_forward_debug_str(self.input_vars)
             for x in self.forward_debug_str:
                 arch += self.indenter(x, depth)
         arch += sg.build_loader(self.name)
@@ -270,6 +270,7 @@ def import_model(mcn_model_path, output_dir, refresh, debug_mode):
     """
     print('Loading mcn model from {}...'.format(mcn_model_path))
     dest_name = os.path.splitext(os.path.basename(mcn_model_path))[0]
+    dest_name = dest_name.replace('-', '_') # ensure valid python variable name
     arch_def_path = '{}/{}.py'.format(output_dir, dest_name)
     weights_path = '{}/{}.pth'.format(output_dir, dest_name)
     exists = all([os.path.exists(p) for p in [arch_def_path, weights_path]])

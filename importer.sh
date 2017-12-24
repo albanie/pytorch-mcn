@@ -10,22 +10,28 @@
 # set paths/options
 refresh_models=true
 debug_mode=true
+use_ipython=true
 mcn_import_dir="~/data/models/matconvnet"
 output_dir="~/data/models/pytorch/mcn-imports"
+
+# Declare list of models to be imported (uncomment selection to run)
+declare -a model_list=("squeezenet1_0-pt-mcn")
 
 pushd `dirname $0` > /dev/null
 SCRIPTPATH=`pwd`
 popd > /dev/null
 
-# Examples (uncomment to run)
-declare -a model_list=("squeezenet1_0-pt-mcn")
 
 function convert_model()
 {
     mcn_model_path=$1
-	converter="ipython $SCRIPTPATH/python/importer.py --"
 	mkdir -p "${output_dir}"
 	echo "Exporting MatConvNet model to PyTorch (may take some time)..."
+    if [ $use_ipython = true ] ; then
+        converter="ipython $SCRIPTPATH/python/importer.py --"
+    else
+        converter="python $SCRIPTPATH/python/importer.py"
+    fi
     if [ $refresh_models = true ] ; then
         opts="--refresh"
     fi
