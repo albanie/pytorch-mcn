@@ -15,9 +15,10 @@ Copyright (C) 2017 Samuel Albanie
 -----------------------------------------------------------
 """
 
-from os.path import join as pjoin
+import os
 from collections import OrderedDict
 
+import argparse
 import torch
 import torch.nn as nn
 import scipy.io as sio
@@ -236,10 +237,10 @@ def build_network(mcn_path, name, debug_mode):
 
     Args:
         mcn_path (str): the path to the .mat file containing the matconvnet
-        network to be converted.
+          network to be converted.
         name (str): the name that will be given to the converted network.
         debug_mode (bool): If enabled, will generate additional source code
-        that makes it easy to compute intermediate network features.
+          that makes it easy to compute intermediate network features.
 
     Returns:
         (str, dict): A string comprising the generated source code for the
@@ -255,18 +256,58 @@ def build_network(mcn_path, name, debug_mode):
         net.add_mod(**node, state_dict=state_dict)
     return net, state_dict
 
-demo_dir = '/users/albanie/coding/libs/pt/pytorch-mcn'
-demo = 'squeezenet1_0-a815701f.pth'
-demo_path = pjoin(demo_dir, demo)
-mcn_dir = '/users/albanie/data/models/matconvnet'
-model_name = 'squeezenet1_0-pt-mcn.mat'
-mcn_path = pjoin(mcn_dir, model_name)
-print('loading mcn model...')
-dest_name = 'squeezenet1_0'
-arch_def_path = 'models/{}.py'.format(dest_name)
-weights_path = 'weights/{}.pth'.format(dest_name)
-net, state_dict = build_network(mcn_path, name=dest_name, debug_mode=True)
+def import_model(mcn_model_path, output_dir, refresh, debug_mode):
+    """Import matconvnet model to pytorch
 
-with open(arch_def_path, 'w') as f:
-    f.write(str(net))
-torch.save(state_dict, weights_path)
+    Args:
+        mcn_path (str): the path to the .mat file containing the matconvnet
+          network to be converted.
+        output_dir (str): path to the location where the imported pytorch model
+          will be stored.
+        refresh (bool): whether to overwrite existing imported models.
+        debug_mode (bool): whether to generate additional model code to help
+          with debugging.
+    """
+    print('Loading mcn model from {}...'.format(mcn_model_path))
+    dest_name = os.path.splitext(os.path.basename(mcn_model_path))[0]
+    arch_def_path = '{}/{}.py'.format(output_dir, dest_name)
+    weights_path = '{}/{}.pth'.format(output_dir, dest_name)
+    exists = all([os.path.exists(p) for p in [arch_def_path, weights_path]])
+    if exists and not refresh:
+        template = 'Found existing imported model at {},{}, skipping...'
+        print(template.format(arch_def_path, weights_path))
+        return
+    if not os.path.isdir(output_dir): os.makedirs(output_dir)
+    net, state_dict = build_network(mcn_model_path, dest_name, debug_mode)
+    print('Saving imported model definition to {}'.format(arch_def_path))
+    with open(arch_def_path, 'w') as f:
+        f.write(str(net))
+    print('Saving imported weights to {}'.format(weights_path))
+    torch.save(state_dict, weights_path)
+
+parser = argparse.ArgumentParser(
+    description='Convert model from MatConvNet to PyTorch.')
+parser.add_argument('mcn_model_path',
+                    type=str,
+                    help='The input should be the path to a matconvnet model \
+                        file (a .mat) file, stored in either dagnn or simplenn \
+                        format')
+parser.add_argument('output_dir',
+                    type=str,
+                    default='./output',
+                    help='Output MATLAB file')
+parser.add_argument('--refresh', dest='refresh', action='store_true',
+                    help='Overwrite existing imported models')
+parser.add_argument('--debug_mode', dest='debug_mode', action='store_true',
+                    help='Generate additional code to help with debugging')
+parser.set_defaults(refresh=False)
+parser.set_defaults(debug_mode=False)
+parsed = parser.parse_args()
+
+mcn_model_path = os.path.expanduser(parsed.mcn_model_path)
+output_dir = os.path.expanduser(parsed.output_dir)
+debug_mode = parsed.debug_mode
+refresh = parsed.refresh
+
+# run importer
+import_model(mcn_model_path, output_dir, refresh, debug_mode)
