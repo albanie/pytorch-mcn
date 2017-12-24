@@ -19,7 +19,8 @@ verify_model=true
 feat_dir="~/data/pt/pytorch-mcn/feats"
 
 # Declare list of models to be imported (uncomment selection to run)
-declare -a model_list=("squeezenet1_0-pt-mcn")
+#declare -a model_list=("squeezenet1_0-pt-mcn")
+declare -a model_list=("squeezenet1_1-pt-mcn")
 
 pushd `dirname $0` > /dev/null
 SCRIPTPATH=`pwd`

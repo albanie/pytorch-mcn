@@ -49,6 +49,10 @@ def compare_network_features(net, mcn_feat_path):
         mcn_feat_path (str): path to the location of the saved intermediate
             matconvent features
     """
+    msg = ('The intermediate features of the MatConvNet model (required for '
+           'verifcation) were not found, did you run the featureDumper.m '
+           'MATLAB script for the target model?')
+    assert os.path.isfile(mcn_feat_path), msg
     mcn_vars = sio.loadmat(mcn_feat_path)
     data = mcn_vars['data']
     data = array2var(data)
