@@ -24,6 +24,7 @@ import scipy.io as sio
 import numpy as np
 
 import ptmcn_utils as pmu
+import source_gen as sg
 
 def load_mcn_net(path):
     """Load matconvnet network into Python dict
@@ -174,18 +175,18 @@ class Network(nn.Module):
     def transcribe(self, depth=2):
         """generate pytorch source code for the model"""
         assert self.input_vars, 'input vars must be set before transcribing'
-        arch = pmu.build_header_str(self.name, self.debug_mode)
+        arch = sg.build_header_str(self.name, self.debug_mode)
         for x in self.attr_str:
             arch += self.indenter(x, depth)
-        arch += pmu.build_forward_str(self.input_vars)
+        arch += sg.build_forward_str(self.input_vars)
         for x in self.forward_str:
             arch += self.indenter(x, depth)
         arch += self.indenter(self.forward_return(), depth)
-        arch += pmu.build_forward_debug_str(self.input_vars)
+        arch += sg.build_forward_debug_str(self.input_vars)
         if self.debug_mode:
             for x in self.forward_debug_str:
                 arch += self.indenter(x, depth)
-        arch += pmu.build_loader(self.name)
+        arch += sg.build_loader(self.name)
         # arch = cleanup(arch)
         return arch
 
