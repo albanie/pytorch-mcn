@@ -6,6 +6,7 @@ as a sanity check when importing models from MatConvNet into PyTorch.
 """
 
 import os
+import argparse
 import importlib.util
 import torch
 from torch.autograd import Variable
@@ -56,10 +57,26 @@ def compare_network_features(net, mcn_feat_path):
     py_vars = net.debug_feats
     show_diffs(mcn_vars, py_vars)
 
-# Modify to match your imported model directory
-model_name = 'squeezenet1_0_pt_mcn'
-output_dir = os.path.expanduser('~/data/models/pytorch/mcn_imports')
-mcn_feat_path = '../feats/{}-feats.mat'.format(model_name)
+parser = argparse.ArgumentParser(
+    description='Compare features from MatConvNet and PyTorch models.')
+parser.add_argument('mcn_model_path', type=str,
+                    help='The input should be the path to a matconvnet model \
+                    file (a .mat) file, stored in either dagnn or simplenn \
+                    format')
+parser.add_argument('output_dir', type=str,
+                    help='location of imported pytorch models')
+parser.add_argument('feat_dir', type=str,
+                    help='location of stored MatConvNet model features')
+parsed = parser.parse_args()
+
+mcn_model_path = os.path.expanduser(parsed.mcn_model_path)
+output_dir = os.path.expanduser(parsed.output_dir)
+feat_dir = os.path.expanduser(parsed.feat_dir)
+
+# configure paths
+model_name = os.path.basename(os.path.splitext(mcn_model_path)[0])
+model_name = model_name.replace('-', '_') # sanitize model name for python
+mcn_feat_path = os.path.join(feat_dir, '{}-feats.mat'.format(model_name))
 model_def_path = os.path.join(output_dir, model_name +'.py')
 weights_path = os.path.join(output_dir, model_name + '.pth')
 
@@ -70,4 +87,5 @@ spec.loader.exec_module(mod)
 func = getattr(mod, model_name)
 net = func(weights_path=weights_path)
 
+# verify features
 compare_network_features(net, mcn_feat_path)

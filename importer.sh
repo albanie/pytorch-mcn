@@ -14,6 +14,10 @@ use_ipython=true
 mcn_import_dir="~/data/models/matconvnet"
 output_dir="~/data/models/pytorch/mcn_imports"
 
+# verification options
+verify_model=true
+feat_dir="~/data/pt/pytorch-mcn/feats"
+
 # Declare list of models to be imported (uncomment selection to run)
 declare -a model_list=("squeezenet1_0-pt-mcn")
 
@@ -38,6 +42,15 @@ function convert_model()
         opts="$opts --debug_mode"
     fi
     $converter $mcn_model_path $output_dir $opts
+
+    if [ $verify_model = true ] ; then
+        if [ $use_ipython = true ] ; then
+            verifier="ipython $SCRIPTPATH/compare/compare_models.py --"
+        else
+            verifier="python $SCRIPTPATH/compare/compare_models.py"
+        fi
+        $verifier $mcn_model_path $output_dir $feat_dir
+    fi
 }
 
 for mcn_model in "${model_list[@]}"
