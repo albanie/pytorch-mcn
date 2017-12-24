@@ -16,7 +16,7 @@ A number of standard models have been imported and verified.
 
 ### Verification
 
-Verifying an imported model requires MATLAB and an a copy of MatConvnet.  The process is as follows:
+Verifying an imported model requires MATLAB and an a copy of MatConvnet (the specific dependencies are given in `compare/startup.m`).  The process is as follows:
 
 1. Run the `compare/featureDumper.m` script to dump intermediate features from the original MatConvNet model to disk.
 2. Import model to PyTorch in `debug_mode` (an option that can be set in `importer.sh`.  This will generate additional source code in the PyTorch model definition that stores every intermediate tensor computed by the network.

@@ -25,7 +25,6 @@ popd > /dev/null
 function convert_model()
 {
     mcn_model_path=$1
-	mkdir -p "${output_dir}"
 	echo "Exporting MatConvNet model to PyTorch (may take some time)..."
     if [ $use_ipython = true ] ; then
         converter="ipython $SCRIPTPATH/python/importer.py --"
