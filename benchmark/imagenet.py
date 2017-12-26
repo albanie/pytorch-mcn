@@ -3,6 +3,9 @@
 
 The module evaluates the performance of a pytorch model on the ILSVRC 2012
 validation set.
+
+Based on PyTorch imagenet example:
+    https://github.com/pytorch/examples/tree/master/imagenet
 """
 
 import os
@@ -19,8 +22,7 @@ import torchvision.transforms as transforms
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 def imagenet_benchmark(model, data_dir, res_cache, refresh_cache,
-                      batch_size=256, num_workers=4):
-    model = torch.nn.DataParallel(model).cuda()
+                       batch_size=256, num_workers=4):
     if not refresh_cache: # load result from cache, if available
         if os.path.isfile(res_cache):
             res = torch.load(res_cache)
@@ -30,21 +32,23 @@ def imagenet_benchmark(model, data_dir, res_cache, refresh_cache,
             msg = 'Top 1 err: {:.2f}, Top 5 err: {:.2f}, Speed: {:.1f}Hz'
             print(msg.format(*info))
             return
+
+    meta = model.meta
     cudnn.benchmark = True
+    model = torch.nn.DataParallel(model).cuda()
     valdir = os.path.join(data_dir, 'val')
-    normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                     std=[0.229, 0.224, 0.225])
+    normalize = transforms.Normalize(mean=meta['mean'], std=meta['std'])
+    im_size = meta['imageSize']
+    assert im_size[0] == im_size[1], 'expected square image size'
     val_loader = torch.utils.data.DataLoader(
         datasets.ImageFolder(valdir, transforms.Compose([
             transforms.Resize(256),
-            transforms.CenterCrop(224),
+            transforms.CenterCrop(im_size[0]),
             transforms.ToTensor(),
             normalize,
         ])),
         batch_size=batch_size, shuffle=False,
         num_workers=num_workers, pin_memory=True)
-
-    # evaluate on validation set
     prec1, prec5, speed = validate(val_loader, model)
     torch.save({'prec1': prec1, 'prec5': prec5, 'speed': speed}, res_cache)
 
@@ -54,19 +58,19 @@ def validate(val_loader, model):
     top5 = AverageMeter()
     speed = WarmupAverageMeter()
     end = time.time()
-    for ii, (input, target) in enumerate(val_loader):
+    for ii, (ims, target) in enumerate(val_loader):
         target = target.cuda(async=True)
-        input_var = torch.autograd.Variable(input, volatile=True)
-        output = model(input_var) # compute output
+        ims_var = torch.autograd.Variable(ims, volatile=True)
+        output = model(ims_var) # compute output
         prec1, prec5 = accuracy(output.data, target, topk=(1, 5))
-        top1.update(prec1[0], input.size(0))
-        top5.update(prec5[0], input.size(0))
-        speed.update(input.size(0)/(time.time() - end))
+        top1.update(prec1[0], ims.size(0))
+        top5.update(prec5[0], ims.size(0))
+        speed.update(ims.size(0)/(time.time() - end))
         end = time.time()
         if ii % 10 == 0:
             print('Test: [{0}/{1}]\t' 'Speed {speed.val:.1f}Hz ({speed.avg:.1f})Hz '
                   'Prec@1 {top1.avg:.3f} {top5.avg:.3f}'.format(
-                   ii, len(val_loader), speed=speed, top1=top1, top5=top5))
+                      ii, len(val_loader), speed=speed, top1=top1, top5=top5))
     top1_err, top5_err = 100 - top1.avg, 100 - top5.avg
     print(' * Prec@1 {0:.3f} Prec@5 {1:.3f}'.format(top1_err, top5_err))
 

@@ -9,13 +9,13 @@
 
 # set paths/options
 refresh_models=true
-debug_mode=true
+debug_mode=false
 use_ipython=true
 mcn_import_dir="~/data/models/matconvnet"
 output_dir="~/data/models/pytorch/mcn_imports"
 
 # verification options
-verify_model=true
+verify_model=false
 feat_dir="~/data/pt/pytorch-mcn/feats"
 
 # Declare list of models to be imported (uncomment selection to run)
