@@ -29,12 +29,27 @@ def array2var(array):
 def show_diffs(mcn_vars, py_vars):
     """Display differences between intermediate variables of both networks.
 
+    When converting models from MatConvNet to PyTorch, we often insert an
+    additional view operation to ensure output shape consistency. Since this
+    operation is not present in the corresponding mcn network, it is skipped
+    in the comparison.
+
+    The suffix `_preflatten` is used to denote the output variable of the
+    module before the View operation.
+
     Args:
         mcn_vars (dict): features computed from the matconvnet network
         py_vars (dict): features computed from the PyTorch network
     """
-    for varname in py_vars.keys():
+    skip = False
+    for idx, varname in enumerate(py_vars.keys()):
+        if skip:
+            skip = False
+            continue
         x = py_vars[varname].contiguous()
+        if '_preflatten' in varname:
+            varname = varname[:varname.index('_preflatten')]
+            skip = True
         x_ = array2var(mcn_vars[varname]).contiguous()
         x = x.view(x.size(0), -1)
         x_ = x_.view(x_.size(0), -1)
@@ -54,7 +69,12 @@ def compare_network_features(net, mcn_feat_path):
            'MATLAB script for the target model?')
     assert os.path.isfile(mcn_feat_path), msg
     mcn_vars = sio.loadmat(mcn_feat_path)
-    data = mcn_vars['data']
+    in_var_names = ['data', 'input', 'x0']
+    msg = 'could not find unique input variable'
+    assert sum([x in mcn_vars for x in in_var_names]) == 1, msg
+    for var_name in in_var_names:
+        if var_name in mcn_vars:
+            data = mcn_vars[var_name]
     data = array2var(data)
     net.eval()
     net.forward_debug(data)

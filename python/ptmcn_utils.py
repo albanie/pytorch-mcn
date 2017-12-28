@@ -12,7 +12,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-def conv2d_mod(block):
+def conv2d_mod(block, in_ch, is_flattened):
     """Build a torch conv2d module from a matconvnet convolutional block
 
     PyTorch and Matconvnet use similar padding conventions for convolution.
@@ -36,20 +36,101 @@ def conv2d_mod(block):
     that P_H = P[0] + P[1] and  P_W = P[2] + P[3] (here P has the format
     [TOP BOTTOM LEFT RIGHT]).
 
+    Note that if both spatial dimensions of the kernel are 1, PyTorch has the
+    option to use a linear module to perform a straight matrix multiply.
+
     Args:
         block (dict): a dictionary of mcn layer block attributes, parsed
         from the stored network .mat file.
+        in_ch (int): the number of input channels to be processed by the
+          convolution
+        is_flattened (bool): if true, replace 1x1 convolutions with linear
+          operators
 
     Returns:
-        nn.Conv2d : the corresponding PyTorch convolutional module
+
+        (nn.Conv2d/nn.Linear, int) : the corresponding PyTorch convolutional
+        module and the number of output channels produced by this module
     """
     fsize = int_list(block['size'])
     stride = tuple(int_list(block['stride']))
     assert len(fsize) == 4, 'expected four dimensions'
     pad, _ = convert_padding(block['pad'])
-    conv_opts = {'in_channels': fsize[2], 'out_channels': fsize[3],
-                 'kernel_size': fsize[:2], 'padding': pad, 'stride': stride}
-    return nn.Conv2d(**conv_opts)
+    if fsize[:2] == [1,1] and is_flattened:
+        assert pad == 0, 'padding must be zero for linear layers'
+        mod = nn.Linear(fsize[2], fsize[3], bias=bool(block['hasBias']))
+    else:
+        msg = 'valid convolution groups cannot be formed from filters'
+        assert int(in_ch / fsize[2]) == (in_ch / fsize[2]), msg
+        num_groups = int(in_ch / fsize[2])
+        conv_opts = {'in_channels': in_ch, 'out_channels': fsize[3],
+                     'bias': block['hasBias'], 'kernel_size': fsize[:2],
+                     'padding': pad, 'stride': stride, 'groups': num_groups}
+        if not block['hasBias']: print('skipping conv bias term')
+        mod = nn.Conv2d(**conv_opts)
+    return mod, fsize[3]
+
+def batchnorm2d_mod(block, mcn_net, param_names):
+    """Build a torch BatcNnorm2d module from a matconvnet BatchNorm block
+
+    PyTorch batch normalization blocks require knowledge of the number of
+    channels that the block will process - these are obtained by inspecting
+    the parameters of the corresponding mcn block.  Unlike in mcn, pytorch
+    stores the moments of the module as separate state, rather than parameters
+    which requires that they are registered as buffers.
+
+    Args:
+        block (dict) : attributes for the mcn batch norm layer
+        mcn_net (dict) : the full mcn network, stored in memory
+        param_names (List[str]): the names of the parameters associated with
+          the mcn batch norm layer.
+
+    Returns:
+        nn.BatchNorm2d : the corresponding PyTorch batch norm module
+    """
+    moment_names = param_names[2]
+    val_idx = mcn_net['params']['name'].index(moment_names)
+    moments = mcn_net['params']['value'][val_idx]
+    num_channels = moments.shape[0]
+    mod = nn.BatchNorm2d(num_channels, eps=block['epsilon'])
+    return mod
+
+def update_bnorm_moments(name, param_name, mcn_net, eps, state_dict):
+    """Convert matconvnet batch norm moments into PyTorch equivalents
+
+    PyTorch stores running variances, rather than running standard
+    deviations (as done by mcn) when tracking batch norm moments, so
+    these are converted accordingly. Both moments (means and stds)
+    are stored as columns in a single mcn parameter array.
+
+    PyTorch uses a slightly different formula for batch norm than
+	mcn at test time (which incorporates the `eps` values during training
+    rather than during inference):
+	pytorch:
+	   y = ( x - mean(x)) / (sqrt(var(x)) + eps) * gamma + beta
+	mcn:
+	   y = ( x - mean(x)) / sqrt(var(x)) * gamma + beta
+
+    Args:
+        name (str): the name of the bnorm layer to be processed
+        param_name (str): the name of the mcn parameter containing the moments
+        mcn_net (dict): the full mcn network, stored in memory
+        eps (float): eps value (used in formula above)
+        state_dict (dict): the dictionary of all states associated with the
+          model
+
+    Returns:
+        dict : the updated state dictionary
+    """
+    val_idx = mcn_net['params']['name'].index(param_name)
+    moments = mcn_net['params']['value'][val_idx]
+    key = '{}.running_mean'.format(name)
+    running_mean = moments[:, 0]
+    state_dict[key] = weights2tensor(running_mean)
+    running_vars = (moments[:,1] ** 2) - eps
+    key = '{}.running_var'.format(name)
+    state_dict[key] = weights2tensor(running_vars)
+    return state_dict
 
 def parse_struct(x):
     """Extract nested dict data structure from matfile struct layout
@@ -70,13 +151,14 @@ def parse_struct(x):
         nested dictionary of parsed data
     """
     # handle scalar base cases for recursion
-    scalar_types = [np.str_, np.uint8, np.int64, np.float32, np.float64]
+    scalar_types = [np.str_, np.uint8, np.uint16, np.int64, np.float32, np.float64]
     if x.dtype.type in scalar_types:
         if x.size == 1: x = x.flatten() ; x = x[0] # flatten scalars
         return x
     fieldnames = [tup[0] for tup in x.dtype.descr]
     parsed = {f:[] for f in fieldnames}
-    if any([dim == 0 for dim in x.shape]):
+    if any([dim == 0 for dim in x.shape]) or \
+        (x.size == 1 and x.flatten()[0] is None):
         return parsed #only recurse on valid storage shapes
     if fieldnames == ['']:
         return [elem[0] for elem in x.flatten()] # prevent blank nesting
@@ -135,6 +217,11 @@ def convert_padding(mcn_pad):
 def convert_uniform_padding(mcn_pad):
     """Convert uniform mcn padding to pytorch pooling padding conventions
 
+    Here "uniform" refers to the fact that the same padding is applied to the
+    top and the bottom of the input.  Similarly the same padding is applied to
+    both the left and the right of the input.  However, the vertical and
+    horizontal padding need not be identical.
+
     Args:
         mcn_pad (ndaray): a 1x4 array specifying symmetric matconvnet padding
 
@@ -148,7 +235,7 @@ def convert_uniform_padding(mcn_pad):
     if np.unique(mcn_pad).size == 1:
         pad = mcn_pad[0]
     else:
-        pad = mcn_pad[:2]
+        pad = tuple(mcn_pad[1:3])
     return pad
 
 class PlaceHolder(object):
@@ -169,6 +256,16 @@ class Concat(PlaceHolder):
 
     def __repr__(self):
         return 'torch.cat(({{}}), dim={})'.format(self.dim)
+
+class Sum(PlaceHolder):
+    """A class that represents the torch elementwise addition operation
+    between tensors"""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+    def __repr__(self):
+        return 'torch.add({}, value=1)'
 
 class Flatten(PlaceHolder):
     """A class that represents the torch tesnor.view() operation"""
@@ -209,71 +306,11 @@ def weights2tensor(x):
         convention
     """
     if x.ndim == 4:
-        x = x.transpose((3, 2, 0, 1))
+        if x.shape[:2] == (1,1): # linear layers
+            x = x[0,0,:,:].T
+        else:
+            x = x.transpose((3, 2, 0, 1))
     elif x.ndim == 2:
         if x.shape[1] == 1:
             x = x.flatten()
     return torch.from_numpy(x)
-
-def build_header_str(net_name, debug_mode):
-    """Generate source code header - constructs the header source
-    code for the network definition file.
-
-    Args:
-        net_name (str): name of the network architecture
-        debug_mode (bool): whether to generate additional debugging code
-
-    Returns:
-        (str) : source code header string.
-    """
-    header = '''
-import torch
-import torch.nn as nn
-
-class {0}(nn.Module):
-
-    def __init__(self):
-        super().__init__()
-'''
-    if debug_mode:
-        header = header + '''
-        from collections import OrderedDict
-        self.debug_feats = OrderedDict()
-'''
-    return header.format(net_name)
-
-def build_forward_str(input_vars):
-    forward_str = '''
-    def forward(self, {}):
-'''.format(input_vars)
-    return forward_str
-
-def build_forward_debug_str(input_vars):
-    forward_debug_str = '''
-    def forward_debug(self, {}):
-        """ This purpose of this function is to provide an easy debugging
-        utility for the converted network.  Cloning is used to prevent in-place
-        operations from modifying feature artefacts. You can prevent the
-        generation of this function by setting `debug_mode = False` in the
-        importer tool.
-    """
-'''.format(input_vars)
-    return forward_debug_str
-
-def build_loader(net_name):
-    loader_name = net_name.lower()
-    forward_str = '''
-def {0}(weights_path=None, **kwargs):
-    """
-    load imported model instance
-
-    Args:
-        weights_path (str): If set, loads model weights from the given path
-    """
-    model = {1}()
-    if weights_path:
-        state_dict = torch.load(weights_path)
-        model.load_state_dict(state_dict)
-    return model
-'''.format(loader_name, net_name)
-    return forward_str

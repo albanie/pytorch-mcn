@@ -22,7 +22,7 @@ import torchvision.transforms as transforms
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 def imagenet_benchmark(model, data_dir, res_cache, refresh_cache,
-                       batch_size=256, num_workers=4):
+                       batch_size=256, num_workers=20):
     if not refresh_cache: # load result from cache, if available
         if os.path.isfile(res_cache):
             res = torch.load(res_cache)
@@ -40,9 +40,10 @@ def imagenet_benchmark(model, data_dir, res_cache, refresh_cache,
     normalize = transforms.Normalize(mean=meta['mean'], std=meta['std'])
     im_size = meta['imageSize']
     assert im_size[0] == im_size[1], 'expected square image size'
+    crop_size = int((256/224) * im_size[0])
     val_loader = torch.utils.data.DataLoader(
         datasets.ImageFolder(valdir, transforms.Compose([
-            transforms.Resize(256),
+            transforms.Resize(crop_size),
             transforms.CenterCrop(im_size[0]),
             transforms.ToTensor(),
             normalize,
@@ -72,7 +73,7 @@ def validate(val_loader, model):
                   'Prec@1 {top1.avg:.3f} {top5.avg:.3f}'.format(
                       ii, len(val_loader), speed=speed, top1=top1, top5=top5))
     top1_err, top5_err = 100 - top1.avg, 100 - top5.avg
-    print(' * Prec@1 {0:.3f} Prec@5 {1:.3f}'.format(top1_err, top5_err))
+    print(' * Err@1 {0:.3f} Err@5 {1:.3f}'.format(top1_err, top5_err))
 
     return top1.avg, top5.avg, speed.avg
 

@@ -50,9 +50,88 @@ def load_mcn_net(path):
     }
     return mcn_net
 
-def extract_dag(mcn_net):
-    """ basic version assumes a linear chain """
+def flatten_if_needed(nodes, complete_dag, is_flattened, flatten_layer):
+    """Ensure that the DAG outputs a two dimensional tensor
+
+    To maintain a consistent prediction interface, all converted pytorch
+    networks output a 2d tensor (rather than a 4d tensor).  This function
+    ensures that the DAG represented by the list of nodes meets this
+    requirement.
+
+    Args:
+        nodes (List): A directed acyclic network, represented as a list
+          of nodes, where each node is a dict containing layer attributes and
+          pointers to its parents and children.
+        complete_dag (bool): whehter of not the current list of nodes represents
+          the complete DAG.
+        is_flattened (bool): whether or not the DAG has already been "flattened"
+          to produce tenors of the require dimensionality.
+        flatten_layer (str): can be either the name of the layer after which
+          flattening is performed, or 'last', in which case it is performed at
+          the end of the network.
+
+    Returns:
+        (List): the updated DAG.
+    """
+    if not is_flattened:
+        prev = nodes[-1]
+        flatten_condition = (flatten_layer == 'last' and complete_dag) \
+                or (flatten_layer == prev['name'])
+        if flatten_condition:
+            # import ipdb ; ipdb.set_trace()
+            # TODO(samuel): Make network surgery more robust (it currently
+            # relies on a unique variable naming modification to maintain a
+            # consistent execution order)
+            name = '{}_flatten'.format(prev['name'])
+            outputs = prev['outputs']
+            prev['outputs'] = ['{}_preflatten'.format(x)
+                                        for x in prev['outputs']]
+            node = {
+                'name': name,
+                'inputs': prev['outputs'],
+                'outputs': outputs,
+                'params': [],
+            }
+            node['mod'] = pmu.Flatten()
+            nodes.append(node)
+            is_flattened = True
+
+        # if flatten_layer == 'last' and complete_dag:
+            # name = '{}_flatten'.format(prev['name'])
+            # outputs = [name]
+            # node_pos = len(nodes)
+        # elif flatten_layer == prev['name']:
+            # import ipdb ; ipdb.set_trace()
+            # node_names = [node['name'] for node in nodes]
+            # idx = node_names.index(flatten_layer)
+            # prev, follow = nodes[idx], nodes[idx + 1]
+            # outputs = follow['inputs']
+            # node_pos = idx + 1
+        # else:
+    return nodes, is_flattened
+
+def extract_dag(mcn_net, drop_prob_softmax=True, in_ch=3, flatten_layer='last'):
+    """Extract DAG nodes from stored matconvnet network
+
+    Transform a stored mcn dagnn network structure into a Directed Acyclic
+    Graph, represented as a list of nodes, each of which has pointers to
+    its inputs and outputs. Since MatConvNet computes convolution groups
+    online, rather than as a stored attribute (as done in PyTorch), the
+    number of channels is tracked during DAG construction.
+
+    Args:
+        mcn_net (dict): a native Python dictionary containg the network
+          parameters, layers and meta information.
+        drop_prob_softmax (bool) [True]: whether to remove the final softmax
+          layer of a network, if present.
+        in_ch (int) [3]: the number of channels expected in input data
+          processed by the network.
+        flatten (str) [last]: the layer after which a "flatten" operation
+          should be inserted (if one is not present in the matconvnet network).
+    """
+    # TODO(samuel): improve state management
     nodes = []
+    is_flattened = False
     num_layers = len(mcn_net['layers']['name'])
     for ii in range(num_layers):
         params = mcn_net['layers']['params'][ii]
@@ -67,7 +146,9 @@ def extract_dag(mcn_net):
         block = mcn_net['layers']['block'][ii]
         opts = {'block': block, 'block_type': bt}
         if bt == 'dagnn.Conv':
-            mod = pmu.conv2d_mod(block)
+            mod, in_ch = pmu.conv2d_mod(block, in_ch, is_flattened)
+        elif bt == 'dagnn.BatchNorm':
+            mod = pmu.batchnorm2d_mod(block, mcn_net, params)
         elif bt == 'dagnn.ReLU':
             mod = nn.ReLU()
         elif bt == 'dagnn.Pooling':
@@ -76,6 +157,9 @@ def extract_dag(mcn_net):
                          'stride': pmu.int_list(block['stride']),
                          'padding': pad, 'ceil_mode': ceil_mode}
             if block['method'] == 'avg':
+                # mcn never includes padding in average pooling.
+                # TODO(samuel): cleanup and add explanation
+                pool_opts['count_include_pad'] = False
                 mod = nn.AvgPool2d(**pool_opts)
             elif block['method'] == 'max':
                 mod = nn.MaxPool2d(**pool_opts)
@@ -88,27 +172,28 @@ def extract_dag(mcn_net):
             mod = pmu.Permute(**opts)
         elif bt == 'dagnn.Flatten':
             mod = pmu.Flatten(**opts)
+            is_flattened = True
         elif bt == 'dagnn.Concat':
             mod = pmu.Concat(**opts)
+        elif bt == 'dagnn.Sum':
+            mod = pmu.Sum(**opts)
+        elif bt == 'dagnn.SoftMax' \
+            and (ii == num_layers -1) and drop_prob_softmax:
+            continue # remove softmax prediction layer
+        else: import ipdb ; ipdb.set_trace()
         node['mod'] = mod
         nodes += [node]
+        complete_dag = (ii == num_layers -1)
+        nodes, is_flattened = flatten_if_needed(nodes, complete_dag,
+                                                is_flattened, flatten_layer)
     return nodes
 
-# def cleanup(repr_):
-    # """fix unusual spacing present in nn.Module __repr__
-    
-    # Args:
-        
-    # """
-    # return x
-
 def ensure_compatible_repr(mod):
-    """Fixes minor bug in __repr__ function for MaxPool2d (present in older
-    PyTorch versions). This function also ensures more consistent repr str
-    spacing.
+    """Fixes minor bug in __repr__ functions for certain modules (present in
+	older PyTorch versions). This function also ensures more consistent repr
+	str spacing.
 
-    Args:
-        mod (nn.Module): candidate module
+    Args: mod (nn.Module): candidate module
 
     Returns:
         (str): modified, compatible __repr__ string for module
@@ -119,13 +204,19 @@ def ensure_compatible_repr(mod):
         if not 'ceil_mode' in repr_str: # string manipulation to fix bug
             assert repr_str[-2:] == '))', 'unexpected repr format'
             repr_str = repr_str[:-1] + ', ceil_mode={})'.format(mod.ceil_mode)
+    elif isinstance(mod, nn.Linear):
+        if not 'bias' in repr_str: # string manipulation to fix bug
+            assert repr_str[-1:] == ')', 'unexpected repr format'
+            bias = mod.bias is not None
+            repr_str = repr_str[:-1] + ', bias={})'.format(bias)
     return repr_str
 
 class Network(nn.Module):
-    def __init__(self, name, mcn_net, debug_mode=True):
+    def __init__(self, name, mcn_net, meta, debug_mode=True):
         super().__init__()
         self.name = name.capitalize()
         self.attr_str = []
+        self.meta = meta
         self.forward_str = []
         self.mcn_net = mcn_net
         self.input_vars = None
@@ -160,13 +251,19 @@ class Network(nn.Module):
             template = "self.debug_feats['{0}'] = {0}.clone()"
             forward_debug_str = template.format(outs)
             self.forward_debug_str += [forward_debug_str]
-
         if not params: return # module has no associated params
         for idx, param_name in enumerate(params):
             if idx == 0:
                 key = '{}.weight'.format(name)
             elif idx == 1:
                 key = '{}.bias'.format(name)
+            elif idx == 2:
+                msg = 'The third parameter should correspond to bn moments'
+                assert 'moments' in params[idx], msg
+                state_dict = pmu.update_bnorm_moments(name, param_name,
+                                                     self.mcn_net, mod.eps,
+                                                     state_dict)
+                continue
             else:
                 raise ValueError('unexpected number of params')
             val_idx = self.mcn_net['params']['name'].index(param_name)
@@ -176,7 +273,8 @@ class Network(nn.Module):
     def transcribe(self, depth=2):
         """generate pytorch source code for the model"""
         assert self.input_vars, 'input vars must be set before transcribing'
-        arch = sg.build_header_str(self.name, self.debug_mode)
+        arch = sg.build_header_str(self.name, **self.meta,
+                                   debug_mode=self.debug_mode)
         for x in self.attr_str:
             arch += self.indenter(x, depth)
         arch += sg.build_forward_str(self.input_vars)
@@ -223,13 +321,15 @@ def simplify_dag(nodes):
                         'params': None}
             simplified.append(new_node)
             skip = True
+            print('simplifying {}, {}'.format(prev['name'], node['name']))
         elif skip:
             skip = False
         else:
             simplified.append(prev)
+    if not skip: simplified.append(node) # handle final node
     return simplified
 
-def build_network(mcn_path, name, debug_mode):
+def build_network(mcn_path, name, flatten_layer, debug_mode):
     """Convert a list of dag nodes into an architecture description
 
     NOTE: We can ensure a valid execution order by exploiting the provided
@@ -239,6 +339,9 @@ def build_network(mcn_path, name, debug_mode):
         mcn_path (str): the path to the .mat file containing the matconvnet
           network to be converted.
         name (str): the name that will be given to the converted network.
+        flatten_layer (str): can be either the name of the layer after which
+          flattening is performed, or 'last', in which case it is performed at
+          the end of the network.
         debug_mode (bool): If enabled, will generate additional source code
           that makes it easy to compute intermediate network features.
 
@@ -248,15 +351,23 @@ def build_network(mcn_path, name, debug_mode):
         netowrk parameters.
     """
     mcn_net = load_mcn_net(mcn_path)
-    nodes = extract_dag(mcn_net)
+    normalization = mcn_net['meta']['normalization']
+    if 'imageStd' in normalization:
+        rgb_std = normalization['imageStd'].flatten().tolist()
+    else:
+        rgb_std = [1, 1, 1]
+    meta = {'rgb_mean': normalization['averageImage'].flatten().tolist(),
+            'rgb_std': rgb_std,
+            'im_size': pmu.int_list(normalization['imageSize'])}
+    nodes = extract_dag(mcn_net, flatten_layer=flatten_layer)
     nodes = simplify_dag(nodes)
     state_dict = OrderedDict()
-    net = Network(name, mcn_net, debug_mode)
+    net = Network(name, mcn_net, meta, debug_mode=debug_mode)
     for node in nodes:
         net.add_mod(**node, state_dict=state_dict)
     return net, state_dict
 
-def import_model(mcn_model_path, output_dir, refresh, debug_mode):
+def import_model(mcn_model_path, output_dir, refresh, **kwargs):
     """Import matconvnet model to pytorch
 
     Args:
@@ -265,8 +376,13 @@ def import_model(mcn_model_path, output_dir, refresh, debug_mode):
         output_dir (str): path to the location where the imported pytorch model
           will be stored.
         refresh (bool): whether to overwrite existing imported models.
+
+    Keyword Args:
         debug_mode (bool): whether to generate additional model code to help
           with debugging.
+        flatten_layer (str): can be either the name of the layer after which
+          flattening is performed, or 'last', in which case it is performed at
+          the end of the network.
     """
     print('Loading mcn model from {}...'.format(mcn_model_path))
     dest_name = os.path.splitext(os.path.basename(mcn_model_path))[0]
@@ -279,7 +395,7 @@ def import_model(mcn_model_path, output_dir, refresh, debug_mode):
         print(template.format(arch_def_path, weights_path))
         return
     if not os.path.isdir(output_dir): os.makedirs(output_dir)
-    net, state_dict = build_network(mcn_model_path, dest_name, debug_mode)
+    net, state_dict = build_network(mcn_model_path, dest_name, **kwargs)
     print('Saving imported model definition to {}'.format(arch_def_path))
     with open(arch_def_path, 'w') as f:
         f.write(str(net))
@@ -299,16 +415,22 @@ parser.add_argument('output_dir',
                     help='Output MATLAB file')
 parser.add_argument('--refresh', dest='refresh', action='store_true',
                     help='Overwrite existing imported models')
+parser.add_argument('--flatten_layer', type=str, dest='flatten_layer',
+                    help=('Supply name of MatConvNet layer after which a',
+                          'PyTorch "(i.e. View(x, -1) for input x), operation',
+                          'should be performed'))
 parser.add_argument('--debug_mode', dest='debug_mode', action='store_true',
                     help='Generate additional code to help with debugging')
 parser.set_defaults(refresh=False)
 parser.set_defaults(debug_mode=False)
+parser.set_defaults(flatten_layer='last')
 parsed = parser.parse_args()
 
 mcn_model_path = os.path.expanduser(parsed.mcn_model_path)
 output_dir = os.path.expanduser(parsed.output_dir)
-debug_mode = parsed.debug_mode
-refresh = parsed.refresh
+opts = {'flatten_layer': parsed.flatten_layer,
+        'debug_mode': parsed.debug_mode,
+        'refresh': parsed.refresh}
 
 # run importer
-import_model(mcn_model_path, output_dir, refresh, debug_mode)
+import_model(mcn_model_path, output_dir, **opts)

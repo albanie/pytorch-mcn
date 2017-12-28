@@ -8,13 +8,16 @@ Copyright (C) 2017 Samuel Albanie
 -----------------------------------------------------------
 """
 
-def build_header_str(net_name, debug_mode):
+def build_header_str(net_name, rgb_mean, rgb_std, im_size, debug_mode):
     """Generate source code header - constructs the header source
     code for the network definition file.
 
     Args:
         net_name (str): name of the network architecture
         debug_mode (bool): whether to generate additional debugging code
+        rgb_mean (List): average rgb image of training data
+        rgb_std (List): standard deviation of rgb images in training data
+        im_size (List): spatial dimensions of the training input image size
 
     Returns:
         (str) : source code header string.
@@ -27,13 +30,16 @@ class {0}(nn.Module):
 
     def __init__(self):
         super().__init__()
+        self.meta = {{'mean': {1},
+                     'std': {2},
+                     'imageSize': {3}}}
 '''
     if debug_mode:
         header = header + '''
         from collections import OrderedDict
-        self.debug_feats = OrderedDict()
+        self.debug_feats = OrderedDict() # only used for feature verification
 '''
-    return header.format(net_name)
+    return header.format(net_name, rgb_mean, rgb_std, im_size)
 
 def build_forward_str(input_vars):
     forward_str = '''
@@ -49,7 +55,7 @@ def build_forward_debug_str(input_vars):
         operations from modifying feature artefacts. You can prevent the
         generation of this function by setting `debug_mode = False` in the
         importer tool.
-    """
+        """
 '''.format(input_vars)
     return forward_debug_str
 

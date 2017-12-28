@@ -26,6 +26,7 @@ function featureDumper(varargin)
 
   for ii = 1:numel(opts.modelNames)
     modelName = opts.modelNames{ii} ;
+    fprintf('dumping features for %s\n', modelName) ;
     modelPath = fullfile(opts.modelDir, sprintf('%s.mat', modelName)) ;
     featFile = sprintf('%s-feats.mat', strrep(modelName, '-', '_')) ;
     featPath = fullfile(opts.featDir, featFile) ;
@@ -58,6 +59,7 @@ function generateFeats(modelPath, destPath, varargin)
   opts = vl_argparse(opts, varargin) ;
 
   net = load(modelPath) ;
+  net = fixBackwardsCompatibility(net) ;
   dag = dagnn.DagNN.loadobj(net) ;
   dag.conserveMemory = false ;
 
@@ -76,3 +78,21 @@ function generateFeats(modelPath, destPath, varargin)
   end
   if ~exist(fileparts(destPath), 'dir'), mkdir(fileparts(destPath)) ; end
   save(destPath, '-struct', 'featStore') ;
+
+% ----------------------------------------------------------
+function net = fixBackwardsCompatibility(net)
+% ----------------------------------------------------------
+%FIXBACKWARDSCOMPATIBILITY - remove unsupported attributes
+%  NET = FIXBACKWARDSCOMPATIBILITY(NET) enables backwards
+%  compatibility by remvoing attributes that are no longer
+%  supported.
+
+removables = {'exBackprop'} ;
+for ii = 1:numel(net.layers)
+  for jj = 1:numel(removables)
+    fieldname = removables{jj} ;
+    if isfield(net.layers(ii).block,fieldname)
+      net.layers(ii).block = rmfield(net.layers(ii).block, fieldname) ;
+    end
+  end
+end
