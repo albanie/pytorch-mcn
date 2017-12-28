@@ -36,7 +36,12 @@ feat_dir="~/data/pt/pytorch-mcn/feats"
                        #"densenet161-pt-mcn"
                        #"densenet169-pt-mcn"
                        #"densenet201-pt-mcn")
-declare -a model_list=("imagenet-matconvnet-alex relu6")
+#declare -a model_list=("imagenet-matconvnet-alex relu6")
+#declare -a model_list=("imagenet-matconvnet-vgg-f-dag relu6"
+                       #"imagenet-matconvnet-vgg-m-dag relu6"
+                       #"imagenet-matconvnet-vgg-s-dag relu6"
+                       #)
+declare -a model_list=("imagenet-matconvnet-vgg-s-dag relu6")
 
 pushd `dirname $0` > /dev/null
 SCRIPTPATH=`pwd`

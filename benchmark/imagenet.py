@@ -37,21 +37,39 @@ def imagenet_benchmark(model, data_dir, res_cache, refresh_cache,
     cudnn.benchmark = True
     model = torch.nn.DataParallel(model).cuda()
     valdir = os.path.join(data_dir, 'val')
-    normalize = transforms.Normalize(mean=meta['mean'], std=meta['std'])
-    im_size = meta['imageSize']
-    assert im_size[0] == im_size[1], 'expected square image size'
-    crop_size = int((256/224) * im_size[0])
+    preproc_transforms = compose_transforms(meta)
     val_loader = torch.utils.data.DataLoader(
-        datasets.ImageFolder(valdir, transforms.Compose([
-            transforms.Resize(crop_size),
-            transforms.CenterCrop(im_size[0]),
-            transforms.ToTensor(),
-            normalize,
-        ])),
+        datasets.ImageFolder(valdir, preproc_transforms),
         batch_size=batch_size, shuffle=False,
         num_workers=num_workers, pin_memory=True)
     prec1, prec5, speed = validate(val_loader, model)
     torch.save({'prec1': prec1, 'prec5': prec5, 'speed': speed}, res_cache)
+
+def compose_transforms(meta):
+    """Compose preprocessing transforms for model
+
+    The imported models use a range of different preprocessing options,
+    depending on how they were originally trained. Models trained in MatConvNet
+    typically require input images that have been scaled to [0,255], rather
+    than the [0,1] range favoured by PyTorch.
+
+    Args:
+        meta (dict): model preprocessing requirements
+
+    Return:
+        (transforms.Compose): Composition of preprocessing transforms
+    """
+    normalize = transforms.Normalize(mean=meta['mean'], std=meta['std'])
+    im_size = meta['imageSize']
+    assert im_size[0] == im_size[1], 'expected square image size'
+    crop_size = int((256/224) * im_size[0])
+    transform_list = [transforms.Resize(crop_size),
+                      transforms.CenterCrop(im_size[0]),
+                      transforms.ToTensor()]
+    if meta['std'] == [1,1,1]: # common amongst mcn models
+        transform_list.append(lambda x: x * 255.0)
+    transform_list.append(normalize)
+    return transforms.Compose(transform_list)
 
 def validate(val_loader, model):
     model.eval()
