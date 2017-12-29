@@ -39,7 +39,9 @@ declare -a model_list=("squeezenet1_0-pt-mcn"
 
 # Examples of models that require the user to provide the location of a
 # "flatten" operation (which corresponds to the pytorch module after which
-# a View(x,-1) reshape will be performed)
+# a View(x,-1) reshape will be performed).  This is passed as the second
+# argument (for instance, `relu6` in the examples below).  See
+# `python/importer.py` for more details of the importer interface.
 declare -a model_list=("imagenet-matconvnet-vgg-f-dag relu6"
                        "imagenet-matconvnet-alex relu6"
                        "imagenet-matconvnet-vgg-m-dag relu6"
@@ -48,7 +50,6 @@ declare -a model_list=("imagenet-matconvnet-vgg-f-dag relu6"
 pushd `dirname $0` > /dev/null
 SCRIPTPATH=`pwd`
 popd > /dev/null
-
 
 function convert_model()
 {
