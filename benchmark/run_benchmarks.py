@@ -52,31 +52,35 @@ def run_benchmarks(gpus, refresh, remove_blacklist):
     """Run bencmarks for imported models
 
     Args:
-        gpus (str):
+        gpus (str): comma separated gpu device identifiers
+        refresh (bool): whether to overwrite the results of existing runs
+        remove_blacklist (bool): whether to remove images from the 2014 ILSVRC
+          blacklist from the validation images used in the benchmark
     """
 
+    # Select models (and their batch sizes) to include in the benchmark.
     model_list = [
-        # ('alexnet_pt_mcn', 256),
-        # ('squeezenet1_0_pt_mcn', 128),
-        # ('squeezenet1_1_pt_mcn', 128),
-        # ('vgg11_pt_mcn', 128),
-        # ('vgg13_pt_mcn', 92),
-        # ('vgg16_pt_mcn', 32),
-        # ('vgg19_pt_mcn', 24),
-        # ('resnet18_pt_mcn', 50),
-        # ('resnet34_pt_mcn', 50),
-        # ('resnet50_pt_mcn', 32),
-        # ('resnet101_pt_mcn', 24),
-        # ('resnet152_pt_mcn', 20),
-        # ('inception_v3_pt_mcn', 64),
-        # ("densenet121_pt_mcn", 50),
-        # ("densenet161_pt_mcn", 32),
-        # ("densenet169_pt_mcn", 32),
-        # ("densenet201_pt_mcn", 32),
-        # ("tv_densenet121", 32),
-        # ('imagenet_matconvnet_alex', 256),
-        # ('imagenet_matconvnet_vgg_f_dag', 128),
-        # ('imagenet_matconvnet_vgg_m_dag', 128),
+        ('alexnet_pt_mcn', 256),
+        ('squeezenet1_0_pt_mcn', 128),
+        ('squeezenet1_1_pt_mcn', 128),
+        ('vgg11_pt_mcn', 128),
+        ('vgg13_pt_mcn', 92),
+        ('vgg16_pt_mcn', 32),
+        ('vgg19_pt_mcn', 24),
+        ('resnet18_pt_mcn', 50),
+        ('resnet34_pt_mcn', 50),
+        ('resnet50_pt_mcn', 32),
+        ('resnet101_pt_mcn', 24),
+        ('resnet152_pt_mcn', 20),
+        ('inception_v3_pt_mcn', 64),
+        ("densenet121_pt_mcn", 50),
+        ("densenet161_pt_mcn", 32),
+        ("densenet169_pt_mcn", 32),
+        ("densenet201_pt_mcn", 32),
+        ("tv_densenet121", 32),
+        ('imagenet_matconvnet_alex', 256),
+        ('imagenet_matconvnet_vgg_f_dag', 128),
+        ('imagenet_matconvnet_vgg_m_dag', 128),
         ('imagenet_matconvnet_vgg_verydeep_16_dag', 32),
     ]
 
