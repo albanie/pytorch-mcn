@@ -1,5 +1,10 @@
 __pycache__
+
+# Data folders
 feats
 res_cache
 imported
+
+# Dev scripts
 DEV-NOTES.md
+compare/qq.sh
