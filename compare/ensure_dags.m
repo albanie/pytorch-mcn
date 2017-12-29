@@ -2,7 +2,9 @@ function ensure_dags
 %ENSURE_DAGS - ensure that pretrained models are in dagnn format
 %   ENSURE_DAGS checks (and if necessary modifies) a selection of
 %   matconvnet models and ensures that they are stored in the DagNN
-%   wrapper format.
+%   wrapper format. It also ensures that the meta properties of the
+%   model conform to a consistent interface (i.e. that the
+%   average RGB training image is stored as a [1 1 3] dimensional array).
 %
 % Licensed under The MIT License [see LICENSE.md for details]
 % Copyright (C) 2017 Samuel Albanie
@@ -13,19 +15,41 @@ function ensure_dags
     'imagenet-matconvnet-vgg-s' ...
     'imagenet-matconvnet-vgg-verydeep-16' ...
   } ;
-
   modelDir = '~/data/models/matconvnet/' ;
+
   for ii = 1:numel(pretrained)
     modelName = pretrained{ii} ;
     fprintf('converting %s to dagnn... \n', modelName) ;
     srcPath = fullfile(modelDir, sprintf('%s.mat', modelName)) ;
     destPath = fullfile(modelDir, sprintf('%s-dag.mat', modelName)) ;
-    if exist(destPath, 'file')
-      fprintf('%s exists, skipping\n', destPath) ;
-      continue
-    end
+		if exist(destPath, 'file')
+			fprintf('%s exists, skipping\n', destPath) ;
+			continue
+		end
     net = load(srcPath) ;
-    dag = dagnn.DagNN.fromSimpleNN(net) ;
+    if isfield(net, 'net'), net = net.net ; end
+    if iscell(net.layers)
+      net.layers(cellfun(@isempty, net.layers)) = [] ; % remove empty layers
+      for jj = 1:numel(net.layers)
+        name = net.layers{jj}.name ;
+        if contains(name, ':')
+          updated = strrep(name, ':', '_') ;
+          fprintf('updating layer name %s to %s for model %s\n', ...
+                             name, updated, modelName) ;
+          net.layers{jj}.name = updated ;
+        end
+      end
+      dag = dagnn.DagNN.fromSimpleNN(net) ;
+    else
+      dag = dagnn.DagNN.loadobj(net) ;
+    end
+
+    if numel(dag.meta.normalization.averageImage) > 3
+      avgIm = dag.meta.normalization.averageImage ;
+      avgIm = mean(mean(avgIm, 1), 2) ;
+      assert(isequal(size(avgIm), [1 1 3]), 'unexpcted average image size')
+      dag.meta.normalization.averageImage = avgIm ;
+    end
     net = dag.saveobj() ; %#ok
     save(destPath, '-struct', 'net') ;
   end

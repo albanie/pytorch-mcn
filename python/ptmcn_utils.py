@@ -315,3 +315,38 @@ def weights2tensor(x):
         if x.shape[1] == 1:
             x = x.flatten()
     return torch.from_numpy(x)
+
+def capitalize_first_letter(s):
+    """Capitalize (only) the first character of a string
+
+    This is an alternative to the  built-in str function capitalize()
+    which changes all letters following the first to lower case.
+
+    Args:
+        s (str): the string to be capitalized.
+
+    Returns:
+        (str): the modified string
+    """
+    base = []
+    if len(s) > 0:
+        base += s[0].upper()
+    if len(s) > 1:
+        base += s[1:]
+    return ''.join(base)
+
+def lower_first_letter(s):
+    """Lower (only) the first character of a string
+
+    Args:
+        s (str): the string to be modified.
+
+    Returns:
+        (str): the modified, lowercase prefixed string
+    """
+    base = []
+    if len(s) > 0:
+        base += s[0].lower()
+    if len(s) > 1:
+        base += s[1:]
+    return ''.join(base)

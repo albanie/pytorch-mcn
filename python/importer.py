@@ -193,7 +193,8 @@ def ensure_compatible_repr(mod):
 	older PyTorch versions). This function also ensures more consistent repr
 	str spacing.
 
-    Args: mod (nn.Module): candidate module
+    Args:
+        mod (nn.Module): candidate module
 
     Returns:
         (str): modified, compatible __repr__ string for module
@@ -214,7 +215,7 @@ def ensure_compatible_repr(mod):
 class Network(nn.Module):
     def __init__(self, name, mcn_net, meta, debug_mode=True):
         super().__init__()
-        self.name = name.capitalize()
+        self.name = pmu.capitalize_first_letter(name)
         self.attr_str = []
         self.meta = meta
         self.forward_str = []

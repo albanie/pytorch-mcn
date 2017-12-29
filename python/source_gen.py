@@ -8,6 +8,8 @@ Copyright (C) 2017 Samuel Albanie
 -----------------------------------------------------------
 """
 
+import ptmcn_utils as pmu
+
 def build_header_str(net_name, rgb_mean, rgb_std, im_size, debug_mode):
     """Generate source code header - constructs the header source
     code for the network definition file.
@@ -60,7 +62,7 @@ def build_forward_debug_str(input_vars):
     return forward_debug_str
 
 def build_loader(net_name):
-    loader_name = net_name.lower()
+    loader_name = pmu.lower_first_letter(net_name)
     forward_str = '''
 def {0}(weights_path=None, **kwargs):
     """

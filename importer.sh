@@ -9,13 +9,13 @@
 
 # set paths/options
 refresh_models=true
-debug_mode=true
+debug_mode=false
 use_ipython=true
 mcn_import_dir="~/data/models/matconvnet"
 output_dir="~/data/models/pytorch/mcn_imports"
 
 # verification options
-verify_model=true
+verify_model=false
 feat_dir="~/data/pt/pytorch-mcn/feats"
 
 # Declare list of models to be imported (comment/uncomment selection to run)
@@ -46,6 +46,11 @@ declare -a model_list=("imagenet-matconvnet-vgg-f-dag relu6"
                        "imagenet-matconvnet-alex relu6"
                        "imagenet-matconvnet-vgg-m-dag relu6"
                        "imagenet-matconvnet-vgg-verydeep-16-dag relu6")
+
+# NetVLAD feature extractors
+declare -a model_list=("vd16_offtheshelf_conv5_3_max-dag"
+                       "vd16_pitts30k_conv5_3_max-dag"
+                       "vd16_tokyoTM_conv5_3_max-dag")
 
 pushd `dirname $0` > /dev/null
 SCRIPTPATH=`pwd`
