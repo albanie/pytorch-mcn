@@ -23,4 +23,8 @@ Verifying an imported model requires MATLAB and an a copy of MatConvnet (the spe
 
 ### Notes
 
-This tool has been tested with Python 3.5 and PyTorch 0.3.0 (by default, `ipython` will be used, but you can switch to standard python by changing a config variable in `importer.sh`).  The tool expects the matconvnet models to be in `dagnn` format (the [ensure_dags.m](compare/ensure_dags.m) script converts models to this format from SimpleNN if required). Ideally in future the model conversion process will run via onnx but it seems that currently quite a lot of support is missing for required functionality.  The plan is therefore to update the converter when possible.
+Model conversion between frameworks can be challenging, because the layers and modules of each framework do not have an exact correspondence. As a result, there is often a bit of work involved in the conversion process, particularly for non-standard architectures.  
+
+This tool has been tested with Python 3.5 and PyTorch 0.3.0 (by default, `ipython` will be used, but you can switch to standard python by changing a config variable in `importer.sh`).  The tool expects the matconvnet models to be in `dagnn` format (the [ensure_dags.m](compare/ensure_dags.m) script converts models to this format from SimpleNN if required). 
+
+Ideally in future the model conversion process will run via onnx but it seems that currently quite a lot of support is missing for required functionality.  The plan is therefore to update the converter when possible.
