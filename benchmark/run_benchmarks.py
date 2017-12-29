@@ -48,7 +48,7 @@ def load_model(model_name):
         net = func(weights_path=weights_path)
     return net
 
-def run_benchmarks(gpus, refresh):
+def run_benchmarks(gpus, refresh, remove_blacklist):
     """Run bencmarks for imported models
 
     Args:
@@ -74,7 +74,10 @@ def run_benchmarks(gpus, refresh):
         # ("densenet169_pt_mcn", 32),
         # ("densenet201_pt_mcn", 32),
         # ("tv_densenet121", 32),
-        ('imagenet_matconvnet_alex', 256),
+        # ('imagenet_matconvnet_alex', 256),
+        # ('imagenet_matconvnet_vgg_f_dag', 128),
+        # ('imagenet_matconvnet_vgg_m_dag', 128),
+        ('imagenet_matconvnet_vgg_verydeep_16_dag', 32),
     ]
 
     if not os.path.exists(CACHE_DIR):
@@ -82,7 +85,8 @@ def run_benchmarks(gpus, refresh):
     os.environ['CUDA_DEVICE_ORDER'] = 'PCI_BUS_ID'
     os.environ['CUDA_VISIBLE_DEVICES'] = str(gpus)
 
-    opts = {'data_dir': ILSVRC_DIR, 'refresh_cache': refresh}
+    opts = {'data_dir': ILSVRC_DIR, 'refresh_cache': refresh,
+            'remove_blacklist': remove_blacklist}
 
     for model_name, batch_size in model_list:
         opts['res_cache'] = '{}/{}.pth'.format(CACHE_DIR, model_name)
@@ -94,9 +98,14 @@ parser.add_argument('--gpus', nargs='?', dest='gpus',
                     help='select gpu device id')
 parser.add_argument('--refresh', dest='refresh', action='store_true',
                     help='refresh results cache')
+parser.add_argument('--remove-blacklist', dest='remove_blacklist',
+                    action='store_true',
+                    help=('evaluate on 2012 validation subset without including'
+                    'the 2014 list of blacklisted images'))
 parser.set_defaults(gpus=None)
 parser.set_defaults(refresh=False)
+parser.set_defaults(remove_blacklist=False)
 parsed = parser.parse_args()
 
 if __name__ == '__main__':
-    run_benchmarks(parsed.gpus, parsed.refresh)
+    run_benchmarks(parsed.gpus, parsed.refresh, parsed.remove_blacklist)

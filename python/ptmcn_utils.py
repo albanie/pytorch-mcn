@@ -208,6 +208,7 @@ def convert_padding(mcn_pad):
         pad = convert_uniform_padding(mcn_pad)
         ceil_mode = False
     else:
+        if math.fabs(mcn_pad[0] - mcn_pad[1]) > 1: import ipdb ; ipdb.set_trace()
         assert math.fabs(mcn_pad[0] - mcn_pad[1]) <= 1, 'cannot be resolved'
         assert math.fabs(mcn_pad[2] - mcn_pad[3]) <= 1, 'cannot be resolved'
         pad = (min(mcn_pad[:2]), min(mcn_pad[2:]))

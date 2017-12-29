@@ -18,30 +18,32 @@ output_dir="~/data/models/pytorch/mcn_imports"
 verify_model=true
 feat_dir="~/data/pt/pytorch-mcn/feats"
 
-# Declare list of models to be imported (uncomment selection to run)
-#declare -a model_list=("squeezenet1_0-pt-mcn")
-#declare -a model_list=("squeezenet1_1-pt-mcn")
-#declare -a model_list=("alexnet-pt-mcn")
-#declare -a model_list=("vgg11-pt-mcn"
-                       #"vgg13-pt-mcn"
-                       #"vgg16-pt-mcn"
-                       #"vgg19-pt-mcn")
-#declare -a model_list=("resnet18-pt-mcn"
-                       #"resnet34-pt-mcn"
-                       #"resnet50-pt-mcn"
-                       #"resnet101-pt-mcn"
-                       #"resnet152-pt-mcn")
-#declare -a model_list=("inception_v3-pt-mcn")
-#declare -a model_list=("densenet121-pt-mcn"
-                       #"densenet161-pt-mcn"
-                       #"densenet169-pt-mcn"
-                       #"densenet201-pt-mcn")
-#declare -a model_list=("imagenet-matconvnet-alex relu6")
-#declare -a model_list=("imagenet-matconvnet-vgg-f-dag relu6"
-                       #"imagenet-matconvnet-vgg-m-dag relu6"
-                       #"imagenet-matconvnet-vgg-s-dag relu6"
-                       #)
-declare -a model_list=("imagenet-matconvnet-vgg-s-dag relu6")
+# Declare list of models to be imported (comment/uncomment selection to run)
+declare -a model_list=("squeezenet1_0-pt-mcn"
+                       "squeezenet1_1-pt-mcn"
+                       "alexnet-pt-mcn"
+                       "vgg11-pt-mcn"
+                       "vgg13-pt-mcn"
+                       "vgg16-pt-mcn"
+                       "vgg19-pt-mcn"
+                       "resnet18-pt-mcn"
+                       "resnet34-pt-mcn"
+                       "resnet50-pt-mcn"
+                       "resnet101-pt-mcn"
+                       "resnet152-pt-mcn"
+                       "inception_v3-pt-mcn"
+                       "densenet121-pt-mcn"
+                       "densenet161-pt-mcn"
+                       "densenet169-pt-mcn"
+                       "densenet201-pt-mcn")
+
+# Examples of models that require the user to provide the location of a
+# "flatten" operation (which corresponds to the pytorch module after which
+# a View(x,-1) reshape will be performed)
+declare -a model_list=("imagenet-matconvnet-vgg-f-dag relu6"
+                       "imagenet-matconvnet-alex relu6"
+                       "imagenet-matconvnet-vgg-m-dag relu6"
+                       "imagenet-matconvnet-vgg-verydeep-16-dag relu6")
 
 pushd `dirname $0` > /dev/null
 SCRIPTPATH=`pwd`

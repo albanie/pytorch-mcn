@@ -22,7 +22,7 @@ import torchvision.transforms as transforms
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 def imagenet_benchmark(model, data_dir, res_cache, refresh_cache,
-                       batch_size=256, num_workers=20):
+                       batch_size=256, num_workers=20, remove_blacklist=False):
     if not refresh_cache: # load result from cache, if available
         if os.path.isfile(res_cache):
             res = torch.load(res_cache)
@@ -36,7 +36,11 @@ def imagenet_benchmark(model, data_dir, res_cache, refresh_cache,
     meta = model.meta
     cudnn.benchmark = True
     model = torch.nn.DataParallel(model).cuda()
-    valdir = os.path.join(data_dir, 'val')
+    if remove_blacklist:
+        subset = 'val_blacklisted'
+    else:
+        subset = 'val'
+    valdir = os.path.join(data_dir, subset)
     preproc_transforms = compose_transforms(meta)
     val_loader = torch.utils.data.DataLoader(
         datasets.ImageFolder(valdir, preproc_transforms),
@@ -62,8 +66,8 @@ def compose_transforms(meta):
     normalize = transforms.Normalize(mean=meta['mean'], std=meta['std'])
     im_size = meta['imageSize']
     assert im_size[0] == im_size[1], 'expected square image size'
-    crop_size = int((256/224) * im_size[0])
-    transform_list = [transforms.Resize(crop_size),
+    resize_target = int((256/224) * max(im_size[:2]))
+    transform_list = [transforms.Resize(resize_target),
                       transforms.CenterCrop(im_size[0]),
                       transforms.ToTensor()]
     if meta['std'] == [1,1,1]: # common amongst mcn models
