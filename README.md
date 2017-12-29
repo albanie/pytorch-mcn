@@ -1,18 +1,16 @@
 pytorch-mcn
 ---
 
-A tool for importing trained MatConvNet models into Pytorch. To go the other way, try 
-[mcnPyTorch](https://github.com/albanie/mcnPyTorch).
+A tool for importing trained MatConvNet models into Pytorch (if you were hoping to go the other way, try 
+[mcnPyTorch](https://github.com/albanie/mcnPyTorch)).
 
 ### Demo
 
-To run the importer, set the path to the MatConvNet model and supply an output directory (where the imported PyTorch models will be stored) in the `importer.sh` script.  Then run 
-
-`bash importer.sh`. 
+To run the importer, set the path to the MatConvNet model and supply an output directory (where the imported PyTorch models will be stored) in the `importer.sh` script.  There are a few examples in the script which can be commented/uncommented to run as a demo.  Then run `bash importer.sh`.  
 
 ### Imported Models
 
-A number of standard models have been imported and verified. 
+A number of standard models have been imported and verified, and can be found [here](http://www.robots.ox.ac.uk/~albanie/pytorch-models.html). 
 
 ### Verification
 
@@ -25,4 +23,4 @@ Verifying an imported model requires MATLAB and an a copy of MatConvnet (the spe
 
 ### Notes
 
-This tool has been tested with Python 3.5 and PyTorch 0.3.0 (by default, `ipython` will be used, but you can switch to standard python by changing a config variable in `importer.sh`).  Ideally the model conversion process will run via onnx but it seems that currently quite a lot of support is missing for required functionality.  The plan is therefore to update the converter when possible.
+This tool has been tested with Python 3.5 and PyTorch 0.3.0 (by default, `ipython` will be used, but you can switch to standard python by changing a config variable in `importer.sh`).  The tool expects the matconvnet models to be in `dagnn` format (the [ensure_dags.m](compare/ensure_dags.m) script converts models to this format from SimpleNN if required). Ideally in future the model conversion process will run via onnx but it seems that currently quite a lot of support is missing for required functionality.  The plan is therefore to update the converter when possible.
