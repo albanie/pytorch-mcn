@@ -11,7 +11,7 @@ function startup
 % Copyright (C) 2017 Samuel Albanie
 
   % modify the paths below to match your installation
-  base = '~/coding/libs/matconvnets/contrib-matconvnet' ;
+  base = '~/coding/libs/mcn/contrib-matconvnet' ;
   run([base '/matlab/vl_setupnn']) ;
   run([base '/contrib/mcnExtraLayers/setup_mcnExtraLayers']) ;
   run([base '/contrib/autonn/setup_autonn']) ;

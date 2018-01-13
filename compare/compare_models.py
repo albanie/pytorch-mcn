@@ -8,6 +8,7 @@ as a sanity check when importing models from MatConvNet into PyTorch.
 import os
 import argparse
 import importlib.util
+import numpy as np
 import torch
 from torch.autograd import Variable
 import scipy.io as sio
@@ -24,7 +25,10 @@ def array2var(array):
     """
     if array.ndim == 3:
         array = array.transpose((2, 0, 1))
-    return Variable(torch.from_numpy(array).unsqueeze(0))
+    var = Variable(torch.from_numpy(array))
+    while len(var.size()) < 4:
+        var = var.unsqueeze(0)
+    return var
 
 def show_diffs(mcn_vars, py_vars):
     """Display differences between intermediate variables of both networks.
@@ -50,7 +54,46 @@ def show_diffs(mcn_vars, py_vars):
         if '_preflatten' in varname:
             varname = varname[:varname.index('_preflatten')]
             skip = True
-        x_ = array2var(mcn_vars[varname]).contiguous()
+        mcn_var = mcn_vars[varname]
+        if 'grid' in varname and mcn_var.shape[0] == 2:
+            # affine grids are ordered differently
+            mcn_var = np.expand_dims(mcn_var.transpose((1, 2, 0)), 0)
+        x_ = array2var(mcn_var).contiguous()
+        # if varname == 'grid': import ipdb ; ipdb.set_trace()
+        # if varname == 'res2c_local':
+            # tmp = x.repeat(3,1,1,1).transpose(1,0).data
+            # tmp_m = x_.repeat(3,1,1,1).transpose(1,0).data
+            # import matplotlib
+            # matplotlib.use('Agg')
+            # import torchvision
+            # im = torchvision.utils.make_grid(tmp, nrow=16, normalize=True,
+                                             # padding=0)
+            # im_m = torchvision.utils.make_grid(tmp_m, nrow=16, normalize=True,
+                                             # padding=0)
+            # # im = tmp[58,:,:,:]
+            # # im_m = tmp_m[58,:,:,:]
+            # from zsvision.zs_iterm import zs_dispFig
+            # import matplotlib.pyplot as plt
+            # plt.imshow(im_m.transpose(0,2).numpy())
+            # zs_dispFig()
+            # plt.imshow(im.transpose(0,2).numpy())
+            # zs_dispFig()
+            # import ipdb ; ipdb.set_trace()
+            # interest = dict()
+            # interest['p_grid'] = py_vars['grid'].data.numpy()
+            # interest['m_grid'] = mcn_vars['grid']
+            # interest['p_res2cx'] = py_vars['res2cx'].data.numpy()
+            # interest['m_res2cx'] = mcn_vars['res2cx']
+            # interest['p_aff'] = py_vars['aff'].data.numpy()
+            # interest['m_aff'] = mcn_vars['aff']
+            # interest['p_res2c_local'] = py_vars['res2c_local'].data.numpy()
+            # interest['m_res2c_local'] = mcn_vars['res2c_local']
+            # import pickle
+            # from scipy.io import savemat
+            # savemat('comps.mat', interest)
+            # with open('comps.pickle', 'wb') as f:
+                # pickle.dump(interest, f, protocol=pickle.HIGHEST_PROTOCOL)
+
         x = x.view(x.size(0), -1)
         x_ = x_.view(x_.size(0), -1)
         diff = torch.sum(torch.abs(x) - torch.abs(x_))/torch.sum(torch.abs(x))

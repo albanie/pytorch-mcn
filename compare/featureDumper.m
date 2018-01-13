@@ -43,8 +43,11 @@ function generateFeats(modelPath, destPath, varargin)
 %
 %   GENERATEFEATS(.., 'name', value, ...) accepts the following options:
 %
-%   `gpus` :: []
-%    Gpu device indices for performing a forward pass over the network.
+%   `gpus` :: 1
+%    Gpu device indices for performing a forward pass over the network. It
+%    is best to do things on the gpu, since certain layers (e.g. the
+%    BilinearSampler) can produce slight border artefacts on the CPU which
+%    prevents numerical checks from passing.
 %
 %   `sampleImPath`: 'BdM.jpg'
 %    Path to a sample RGB image for processing.
@@ -54,7 +57,7 @@ function generateFeats(modelPath, destPath, varargin)
 %    url = ${base}#/media/File:Modigliani_-_Busto_de_mulher.jpg
 %    where ${base} = https://en.wikipedia.org/wiki/Amedeo_Modigliani
 
-  opts.gpus = [] ;
+  opts.gpus = 1 ;
   opts.sampleImPath = 'BdM.jpg' ;
   opts = vl_argparse(opts, varargin) ;
 
