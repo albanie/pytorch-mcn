@@ -61,7 +61,9 @@ def conv2d_mod(block, in_ch, is_flattened):
         mod = nn.Linear(fsize[2], fsize[3], bias=bool(block['hasBias']))
     else:
         msg = 'valid convolution groups cannot be formed from filters'
-        assert int(in_ch / fsize[2]) == (in_ch / fsize[2]), msg
+        valid_conv_groups = int(in_ch / fsize[2]) == (in_ch / fsize[2])
+        if not valid_conv_groups: import ipdb ; ipdb.set_trace()
+        assert valid_conv_groups, msg
         num_groups = int(in_ch / fsize[2])
         conv_opts = {'in_channels': in_ch, 'out_channels': fsize[3],
                      'bias': block['hasBias'], 'kernel_size': fsize[:2],
@@ -69,6 +71,46 @@ def conv2d_mod(block, in_ch, is_flattened):
         if not block['hasBias']: print('skipping conv bias term')
         mod = nn.Conv2d(**conv_opts)
     return mod, fsize[3]
+
+def align_interfaces(mcn_net, remap_aff_gen=True):
+    """Modify layer inputs/outputs to match pytorch conventions
+
+    Unlike in mcn, the interface for affine grid generation in pytorch
+    requires knowledge of the batch size and number of channels of the
+    feature map to which it will be applied. To allow the correct source
+    code generation, this feature map is added as an additional input to
+    the mcn graph through a simple graph search.  Since this assumes
+    that the grid is going to be coupled to a Bilinear Sampler(which may not
+    be the case in more unusual architectures, which may predict a grid without
+    its application, it can be disabled).
+
+        mcn_net (dict): a native Python dictionary containg the network
+          parameters, layers and meta information.
+        remap_aff_gen (bool, optional [True]): remap the inputs to the grid
+          generator block to enable runtime estimation of grid size.
+
+    Returns:
+        (dict): the updated network
+    """
+    if not remap_aff_gen:
+        return mcn_net
+    layer_types = mcn_net['layers']['type']
+    if not 'dagnn.AffineGridGenerator' in layer_types:
+        return mcn_net
+    # find the relevant layers
+    aff_idx = layer_types.index('dagnn.AffineGridGenerator')
+    outputs = mcn_net['layers']['outputs'][aff_idx]
+    assert len(outputs) == 1, 'expected grid generator to have a single output'
+    for c_idx, input_vars in enumerate(mcn_net['layers']['inputs']):
+        if outputs[0] in input_vars:
+            sampler_idx = c_idx # we assume the grid is consumed by a sampler
+    sampler_inputs = mcn_net['layers']['inputs'][sampler_idx]
+    assert len(sampler_inputs) ==  2, 'expected sampler to have two inputs'
+    feat_name = sampler_inputs[0]
+    # supply feature as additional input to affine grid generator to resolve
+    # runtime size estimation issue
+    mcn_net['layers']['inputs'][aff_idx].append(feat_name)
+    return mcn_net
 
 def batchnorm2d_mod(block, mcn_net, param_names):
     """Build a torch BatcNnorm2d module from a matconvnet BatchNorm block
@@ -262,11 +304,8 @@ class Sum(PlaceHolder):
     """A class that represents the torch elementwise addition operation
     between tensors"""
 
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-
     def __repr__(self):
-        return 'torch.add({}, value=1)'
+        return 'torch.add({0}, 1, {1})'
 
 class Flatten(PlaceHolder):
     """A class that represents the torch tesnor.view() operation"""
@@ -276,6 +315,36 @@ class Flatten(PlaceHolder):
 
     def __repr__(self):
         return '{0}.view({0}.size(0), -1)'
+
+class AffineGridGen(PlaceHolder):
+    """A class that represents the torch affine_grid function
+
+    Note that the ordering of the affine parameter matrix differs between
+    pytorch and mcn.  Consequently, we must re-order the elements (see the
+    __repr__ below for the ordering).
+
+    The interface for this function is slightly unusual - it takes a `size`
+    argument in the form NxCxHxW (e.g. torch.Size((1,3,100,100))).  However,
+    the channel component C is not used by the function, and is non-trivial
+    to determine from the matconvnet graph (which does not store this
+    information. To address this issue, we perform an 'interface alignment'
+    step on the network to treat the feature map that the grid will be applied
+    to as an extra input to this layer.
+    """
+    def __init__(self, height, width, dummy_channels=3, **kwargs):
+        super().__init__(**kwargs)
+        self.size = (1, dummy_channels, height, width)
+
+    def __repr__(self):
+        return ('F.affine_grid({0}.view(-1,6)[:,[3, 2, 5, 1, 0, 4]]'
+                '.view(-1, 2, 3), {1}.size())')
+
+class BilinearSampler(PlaceHolder):
+    """A class that represents the torch (bilinear) grid_sample function
+    """
+
+    def __repr__(self):
+        return "F.grid_sample({0}, {1}, mode='bilinear')"
 
 class Permute(PlaceHolder):
     """A class that represents the torch.tranpose() operation"""

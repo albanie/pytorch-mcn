@@ -10,7 +10,8 @@ Copyright (C) 2017 Samuel Albanie
 
 import ptmcn_utils as pmu
 
-def build_header_str(net_name, rgb_mean, rgb_std, im_size, debug_mode):
+def build_header_str(net_name, rgb_mean, rgb_std, im_size, uses_functional,
+                     debug_mode):
     """Generate source code header - constructs the header source
     code for the network definition file.
 
@@ -20,13 +21,21 @@ def build_header_str(net_name, rgb_mean, rgb_std, im_size, debug_mode):
         rgb_mean (List): average rgb image of training data
         rgb_std (List): standard deviation of rgb images in training data
         im_size (List): spatial dimensions of the training input image size
+        uses_functional (bool): whether the network requires the
+           torch.functional module
 
     Returns:
         (str) : source code header string.
     """
-    header = '''
+    imports = '''
 import torch
 import torch.nn as nn
+'''
+    if uses_functional:
+        imports = imports + '''
+import torch.nn.functional as F
+'''
+    header = imports + '''
 
 class {0}(nn.Module):
 

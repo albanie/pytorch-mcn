@@ -52,6 +52,9 @@ declare -a model_list=("vd16_offtheshelf_conv5_3_max-dag"
                        "vd16_pitts30k_conv5_3_max-dag"
                        "vd16_tokyoTM_conv5_3_max-dag")
 
+# Pedestrian Alignment Network
+declare -a model_list=("ped_align")
+
 pushd `dirname $0` > /dev/null
 SCRIPTPATH=`pwd`
 popd > /dev/null
