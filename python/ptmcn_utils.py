@@ -12,7 +12,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-def conv2d_mod(block, in_ch, is_flattened):
+def conv2d_mod(block, in_ch, is_flattened, verbose):
     """Build a torch conv2d module from a matconvnet convolutional block
 
     PyTorch and Matconvnet use similar padding conventions for convolution.
@@ -46,6 +46,8 @@ def conv2d_mod(block, in_ch, is_flattened):
           convolution
         is_flattened (bool): if true, replace 1x1 convolutions with linear
           operators
+        verbose (bool): whether to display more detailed information during the
+          conversion process.
 
     Returns:
 
@@ -68,7 +70,7 @@ def conv2d_mod(block, in_ch, is_flattened):
         conv_opts = {'in_channels': in_ch, 'out_channels': fsize[3],
                      'bias': block['hasBias'], 'kernel_size': fsize[:2],
                      'padding': pad, 'stride': stride, 'groups': num_groups}
-        if not block['hasBias']: print('skipping conv bias term')
+        if not block['hasBias'] and verbose: print('skipping conv bias term')
         mod = nn.Conv2d(**conv_opts)
     return mod, fsize[3]
 

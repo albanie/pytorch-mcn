@@ -115,7 +115,8 @@ def flatten_if_needed(nodes, complete_dag, is_flattened, flatten_layer):
         # else:
     return nodes, is_flattened
 
-def extract_dag(mcn_net, drop_prob_softmax=True, in_ch=3, flatten_layer='last'):
+def extract_dag(mcn_net, drop_prob_softmax=True, in_ch=3, flatten_layer='last',
+                **kwargs):
     """Extract DAG nodes from stored matconvnet network
 
     Transform a stored mcn dagnn network structure into a Directed Acyclic
@@ -142,6 +143,10 @@ def extract_dag(mcn_net, drop_prob_softmax=True, in_ch=3, flatten_layer='last'):
           processed by the network.
         flatten (str) [last]: the layer after which a "flatten" operation
           should be inserted (if one is not present in the matconvnet network).
+
+    Keyword Args:
+        verbose (bool): whether to display more detailed information during the
+          conversion process.
 
     Returns:
         nodes (List): A directed acyclic network, represented as a list
@@ -174,7 +179,7 @@ def extract_dag(mcn_net, drop_prob_softmax=True, in_ch=3, flatten_layer='last'):
         if bt == 'dagnn.Conv':
             msg = 'conv layers should only take a single_input'
             assert len(in_chs) == 1, msg
-            mod, out_ch = pmu.conv2d_mod(block, in_chs[0], is_flattened)
+            mod, out_ch = pmu.conv2d_mod(block, in_chs[0], is_flattened, **kwargs)
             out_chs = [out_ch]
         elif bt == 'dagnn.BatchNorm':
             mod = pmu.batchnorm2d_mod(block, mcn_net, params)
@@ -224,7 +229,8 @@ def extract_dag(mcn_net, drop_prob_softmax=True, in_ch=3, flatten_layer='last'):
             out_chs = in_chs
             uses_functional = True
         elif bt == 'dagnn.Loss':
-            print('skipping loss layer: {}'.format(node['name']))
+            if kwargs['verbose']:
+                print('skipping loss layer: {}'.format(node['name']))
             continue
         elif bt == 'dagnn.SoftMax' \
             and (ii == num_layers -1) and drop_prob_softmax:
@@ -445,7 +451,7 @@ def prepare_meta(normalization, pt_norm):
             'im_size': im_size}
     return meta, conv_sc
 
-def build_network(mcn_path, name, flatten_layer, debug_mode, pt_norm):
+def build_network(mcn_path, name, flatten_layer, debug_mode, pt_norm, verbose):
     """Convert a list of dag nodes into an architecture description
 
     NOTE: We can ensure a valid execution order by exploiting the provided
@@ -463,6 +469,8 @@ def build_network(mcn_path, name, flatten_layer, debug_mode, pt_norm):
         pt_norm (bool): If true (and the first layer of the model is a
           convolution), scale the convoluational filters and biases to use the
           standard pytorch normalization values from ImageNet.
+        verbose (bool): whether to display more detailed information during the
+          conversion process.
 
     Returns:
         (str, dict): A string comprising the generated source code for the
@@ -472,7 +480,8 @@ def build_network(mcn_path, name, flatten_layer, debug_mode, pt_norm):
     mcn_net = load_mcn_net(mcn_path)
     normalization = mcn_net['meta']['normalization']
     meta, _ = prepare_meta(normalization, pt_norm)
-    nodes, uses_functional = extract_dag(mcn_net, flatten_layer=flatten_layer)
+    nodes, uses_functional = extract_dag(mcn_net, flatten_layer=flatten_layer,
+                                         verbose=verbose)
     nodes = simplify_dag(nodes)
     state_dict = OrderedDict()
     net = Network(name, mcn_net, meta, uses_functional=uses_functional,
@@ -494,6 +503,8 @@ def import_model(mcn_model_path, output_dir, refresh, **kwargs):
     Keyword Args:
         debug_mode (bool): whether to generate additional model code to help
           with debugging.
+        verbose (bool): whether to display more detailed information during the
+          conversion process.
         flatten_layer (str): can be either the name of the layer after which
           flattening is performed, or 'last', in which case it is performed at
           the end of the network.
@@ -535,6 +546,8 @@ parser.add_argument('--flatten_layer', type=str, dest='flatten_layer',
                           'should be performed'))
 parser.add_argument('--debug_mode', dest='debug_mode', action='store_true',
                     help='Generate additional code to help with debugging')
+parser.add_argument('--verbose', dest='verbose', action='store_true',
+                    help='Prints additional information during converstion')
 parser.add_argument('--pt_norm', dest='pt_norm', action='store_true',
                     help=('Scale parameters to use standard PyTorch '
                            'normalization | Default [False]'))
@@ -549,7 +562,8 @@ output_dir = os.path.expanduser(parsed.output_dir)
 opts = {'flatten_layer': parsed.flatten_layer,
         'debug_mode': parsed.debug_mode,
         'refresh': parsed.refresh,
-        'pt_norm': parsed.pt_norm}
+        'pt_norm': parsed.pt_norm,
+        'verbose': parsed.verbose}
 
 # run importer
 import_model(mcn_model_path, output_dir, **opts)

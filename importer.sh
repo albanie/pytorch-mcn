@@ -13,6 +13,7 @@ debug_mode=false
 use_ipython=true
 mcn_import_dir="~/data/models/matconvnet"
 output_dir="~/data/models/pytorch/mcn_imports"
+verbose=false
 
 # verification options
 verify_model=false
@@ -65,15 +66,18 @@ function convert_model()
     flatten_layer=$2
 	echo "Exporting MatConvNet model to PyTorch (may take some time)..."
     if [ $use_ipython = true ] ; then
-        converter="ipython $SCRIPTPATH/python/importer.py --"
+        converter="ipython3 $SCRIPTPATH/python/importer.py --"
     else
-        converter="python $SCRIPTPATH/python/importer.py"
+        converter="python3 $SCRIPTPATH/python/importer.py"
     fi
     if [ $refresh_models = true ] ; then
         opts="--refresh"
     fi
     if [ $debug_mode = true ] ; then
         opts="$opts --debug_mode"
+    fi
+    if [ $verbose = true ] ; then
+        opts="$opts --verbose"
     fi
     if [ ! -z "$flatten_layer" ] ; then
         opts="$opts --flatten_layer ${flatten_layer}"
@@ -96,7 +100,9 @@ do
     mcn_model=${tokens[0]}
     flatten_layer=${tokens[1]}
     echo "importing $mcn_model"
-    echo "flattening at $flatten_layer"
+    if [ ! -z "$flatten_layer" ] ; then
+        echo "flattening at $flatten_layer"
+    fi
     mcn_model_path="${mcn_import_dir}/${mcn_model}.mat"
     convert_model $mcn_model_path $flatten_layer
 done
