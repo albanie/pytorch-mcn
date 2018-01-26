@@ -347,8 +347,12 @@ class Network(nn.Module):
             elif idx == 1:
                 key = '{}.bias'.format(name)
             elif idx == 2:
+                # check for appropriate name
+                std_name = 'moments' in params[idx]
+                std_suffixes = ['x', '_m']
+                std_sfx = any([params[idx].endswith(x) for x in std_suffixes])
                 msg = 'The third parameter should correspond to bn moments'
-                assert 'moments' in params[idx], msg
+                assert std_name or std_sfx, msg
                 state_dict = pmu.update_bnorm_moments(name, param_name,
                                                      self.mcn_net, mod.eps,
                                                      state_dict)

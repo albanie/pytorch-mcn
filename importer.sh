@@ -56,6 +56,16 @@ declare -a model_list=("vd16_offtheshelf_conv5_3_max-dag"
 # Pedestrian Alignment Network
 declare -a model_list=("ped_align")
 
+# Emotion recognition models
+declare -a model_list=("alexnet-face-bn-dag"
+					   "alexnet-face-fer-bn-dag"
+					   "vgg-m-face-bn-dag"
+					   "vgg-vd-face-fer-dag"
+					   "vgg-vd-face-sfew-dag"
+					   "resnet50-face-bn-dag"
+					   "resnet50-face-sfew-dag"
+                       )
+
 pushd `dirname $0` > /dev/null
 SCRIPTPATH=`pwd`
 popd > /dev/null
