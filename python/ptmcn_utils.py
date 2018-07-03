@@ -348,6 +348,26 @@ class BilinearSampler(PlaceHolder):
     def __repr__(self):
         return "F.grid_sample({0}, {1}, mode='bilinear')"
 
+class GlobalPooling(PlaceHolder):
+    """A class that represents the Global Pooling 2d operation"""
+
+    def __init__(self, pad=0, dilate=(1,1), method='avg', stride=(1, 1),
+                 **kwargs):
+        if isinstance(pad, np.ndarray) and pad.sum() == 0:
+            pad = 0 # use common format
+        method = method.lower()
+        assert method in ['avg', 'max'], 'unrecognised pooling method'
+        if isinstance(stride, np.ndarray) and (stride == 1).all():
+            stride = 1
+        super().__init__(**kwargs)
+        self.pad = pad
+        self.stride = stride
+        self.method = method
+
+    def __repr__(self):
+        return "F.{}_pool2d({{0}}, {{0}}.size()[2:], stride={}, padding={})"\
+                .format(self.method, self.stride, self.pad)
+
 class Permute(PlaceHolder):
     """A class that represents the torch.tranpose() operation"""
 

@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """MatConvNet Importer module
 
-The module contains methods to convert MatConvNet models (stored in either
-the `simplenn` or `dagnn` formats) into PyTorch models. The model conversion
+The module contains methods to convert MatConvNet models (stored in
+the `dagnn` formats) into PyTorch models. The model conversion
 consists of two stages:
   (1) source code generation - a python file is generated containing the
       the network definition
@@ -187,6 +187,12 @@ def extract_dag(mcn_net, drop_prob_softmax=True, in_ch=3, flatten_layer='last',
         elif bt == 'dagnn.ReLU':
             mod = nn.ReLU()
             out_chs = in_chs
+        elif bt == 'dagnn.Sigmoid':
+            mod = nn.Sigmoid()
+            out_chs = in_chs
+        elif bt == 'dagnn.GlobalPooling':
+            mod = pmu.GlobalPooling(**block, **opts)
+            out_chs = in_chs
         elif bt == 'dagnn.Pooling':
             pad, ceil_mode = pmu.convert_padding(block['pad'])
             pool_opts = {'kernel_size': pmu.int_list(block['poolSize']),
@@ -208,6 +214,9 @@ def extract_dag(mcn_net, drop_prob_softmax=True, in_ch=3, flatten_layer='last',
             out_chs = in_chs
         elif bt == 'dagnn.Permute':
             mod = pmu.Permute(**opts)
+            out_chs = in_chs
+        elif bt == 'dagnn.Reshape':
+            mod = pmu.Reshape(**opts)
             out_chs = in_chs
         elif bt == 'dagnn.Flatten':
             mod = pmu.Flatten(**opts)
@@ -532,12 +541,11 @@ def import_model(mcn_model_path, output_dir, refresh, **kwargs):
     torch.save(state_dict, weights_path)
 
 parser = argparse.ArgumentParser(
-    description='Convert model from MatConvNet to PyTorch.')
+                    description='Convert model from MatConvNet to PyTorch.')
 parser.add_argument('mcn_model_path',
                     type=str,
                     help='The input should be the path to a matconvnet model \
-                        file (a .mat) file, stored in either dagnn or simplenn \
-                        format')
+                        file (a .mat) file, stored in dagnn format')
 parser.add_argument('output_dir',
                     type=str,
                     default='./output',
