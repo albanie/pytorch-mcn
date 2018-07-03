@@ -184,14 +184,14 @@ def extract_dag(mcn_net, drop_prob_softmax=True, in_ch=3, flatten_layer='last',
         elif bt == 'dagnn.BatchNorm':
             mod = pmu.batchnorm2d_mod(block, mcn_net, params)
             out_chs = in_chs
+        elif bt == 'dagnn.GlobalPooling':
+            mod = pmu.globalpool_mod(block, mcn_net, params)
+            out_chs = in_chs
         elif bt == 'dagnn.ReLU':
             mod = nn.ReLU()
             out_chs = in_chs
         elif bt == 'dagnn.Sigmoid':
             mod = nn.Sigmoid()
-            out_chs = in_chs
-        elif bt == 'dagnn.GlobalPooling':
-            mod = pmu.GlobalPooling(**block, **opts)
             out_chs = in_chs
         elif bt == 'dagnn.Pooling':
             pad, ceil_mode = pmu.convert_padding(block['pad'])
@@ -229,7 +229,8 @@ def extract_dag(mcn_net, drop_prob_softmax=True, in_ch=3, flatten_layer='last',
             mod = pmu.Sum(**opts)
             out_chs = [in_chs[0]] # (all input channels must be the same)
         elif bt == 'dagnn.AffineGridGenerator':
-            mod = pmu.AffineGridGen(height=block['Ho'], width=block['Wo'],
+            mod = pmu.AffineGridGen(height=block['Ho'],
+                                    width=block['Wo'],
                                     **opts)
             out_chs = in_chs
             uses_functional = True
@@ -326,6 +327,8 @@ class Network(nn.Module):
         if not isinstance(mod, pmu.PlaceHolder):
             mod_str = ensure_compatible_repr(mod)
             self.attr_str += ['self.{} = nn.{}'.format(name, mod_str)]
+        elif mod.blank:
+            return # do not add anything to the architecture
         outs = ','.join(outputs)
         ins = ','.join(inputs)
         if not self.input_vars: self.input_vars = ins
@@ -468,7 +471,8 @@ def build_network(mcn_path, name, flatten_layer, debug_mode, pt_norm, verbose):
     """Convert a list of dag nodes into an architecture description
 
     NOTE: We can ensure a valid execution order by exploiting the provided
-    ordering of the stored network.
+    ordering of the stored network. This is because when the dag object is
+    stored or rebuilt, it performs a topological sort on the graph.
 
     Args:
         mcn_path (str): the path to the .mat file containing the matconvnet
@@ -513,7 +517,7 @@ def import_model(mcn_model_path, output_dir, refresh, **kwargs):
           will be stored.
         refresh (bool): whether to overwrite existing imported models.
 
-    Keyword Args:
+    Kwargs:
         debug_mode (bool): whether to generate additional model code to help
           with debugging.
         verbose (bool): whether to display more detailed information during the
@@ -544,8 +548,8 @@ parser = argparse.ArgumentParser(
                     description='Convert model from MatConvNet to PyTorch.')
 parser.add_argument('mcn_model_path',
                     type=str,
-                    help='The input should be the path to a matconvnet model \
-                        file (a .mat) file, stored in dagnn format')
+                    help=('The input should be the path to a matconvnet model'
+                          'file (a .mat) file, stored in dagnn format'))
 parser.add_argument('output_dir',
                     type=str,
                     default='./output',
@@ -553,8 +557,8 @@ parser.add_argument('output_dir',
 parser.add_argument('--refresh', dest='refresh', action='store_true',
                     help='Overwrite existing imported models')
 parser.add_argument('--flatten_layer', type=str, dest='flatten_layer',
-                    help=('Supply name of MatConvNet layer after which a',
-                          'PyTorch "(i.e. View(x, -1) for input x), operation',
+                    help=('Supply name of MatConvNet layer after which a'
+                          'PyTorch "(i.e. View(x, -1) for input x), operation'
                           'should be performed'))
 parser.add_argument('--debug_mode', dest='debug_mode', action='store_true',
                     help='Generate additional code to help with debugging')
@@ -576,6 +580,4 @@ opts = {'flatten_layer': parsed.flatten_layer,
         'refresh': parsed.refresh,
         'pt_norm': parsed.pt_norm,
         'verbose': parsed.verbose}
-
-# run importer
 import_model(mcn_model_path, output_dir, **opts)

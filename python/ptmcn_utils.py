@@ -283,13 +283,42 @@ def convert_uniform_padding(mcn_pad):
         pad = tuple(mcn_pad[1:3])
     return pad
 
+def globalpool_mod(block):
+    """Build a torch pool module from a matconvnet GlobalPooling block
+
+    Args:
+        block (dict) : attributes for the mcn batch norm layer
+
+    Returns:
+        nn.Module : the corresponding global pooling module
+    """
+    method = block['method'].lower()
+    if method == 'avg':
+        mod = nn.AdaptiveAvgPool2d(1)
+    elif method == 'max':
+        mod = nn.AdaptiveMaxPool2d(1)
+    else:
+        raise ValueError('unrecognised pooling method {}'.format(method))
+    return mod
+
 class PlaceHolder(object):
     """A placeholder class for pytorch operations that are defined through
-    code execution, rather than as nn modules"""
+    code execution, rather than as nn modules
 
-    def __init__(self, block, block_type):
-        self.block = block
-        self.block_type = block_type
+    Args:
+        blank (bool) [False]: if True, the placeholder will produce no output
+        in the final network architecture.
+    Kwargs:
+        All kwargs are set as attributes on the object.
+    """
+
+    def __init__(self, blank=False, **kwargs):
+        self.blank = blank
+        for key, val in kwargs.items():
+            setattr(self, key, val)
+
+    def __repr__(self):
+        raise ValueError('must be overriden by subclass')
 
 class Concat(PlaceHolder):
     """A class that represents the torch.cat() operation"""
@@ -348,25 +377,25 @@ class BilinearSampler(PlaceHolder):
     def __repr__(self):
         return "F.grid_sample({0}, {1}, mode='bilinear')"
 
-class GlobalPooling(PlaceHolder):
-    """A class that represents the Global Pooling 2d operation"""
-
-    def __init__(self, pad=0, dilate=(1,1), method='avg', stride=(1, 1),
-                 **kwargs):
-        if isinstance(pad, np.ndarray) and pad.sum() == 0:
-            pad = 0 # use common format
-        method = method.lower()
-        assert method in ['avg', 'max'], 'unrecognised pooling method'
-        if isinstance(stride, np.ndarray) and (stride == 1).all():
-            stride = 1
-        super().__init__(**kwargs)
-        self.pad = pad
-        self.stride = stride
-        self.method = method
-
-    def __repr__(self):
-        return "F.{}_pool2d({{0}}, {{0}}.size()[2:], stride={}, padding={})"\
-                .format(self.method, self.stride, self.pad)
+#class GlobalPooling(PlaceHolder):
+#    """A class that represents the Global Pooling 2d operation"""
+#
+#    def __init__(self, pad=0, dilate=(1,1), method='avg', stride=(1, 1),
+#                 **kwargs):
+#        if isinstance(pad, np.ndarray) and pad.sum() == 0:
+#            pad = 0 # use common format
+#        method = method.lower()
+#        assert method in ['avg', 'max'], 'unrecognised pooling method'
+#        if isinstance(stride, np.ndarray) and (stride == 1).all():
+#            stride = 1
+#        super().__init__(**kwargs)
+#        self.pad = pad
+#        self.stride = stride
+#        self.method = method
+#
+#    def __repr__(self):
+#        return "nn.{}_pool2d({{0}}, {{0}}.size()[2:], stride={}, padding={})"\
+#                .format(self.method, self.stride, self.pad)
 
 class Permute(PlaceHolder):
     """A class that represents the torch.tranpose() operation"""
@@ -376,6 +405,30 @@ class Permute(PlaceHolder):
         self.order = self.block['order'].flatten() - 1 # fix 1-indexing
 
     def __repr__(self):
+        import ipdb ; ipdb.set_trace()
+        #TODO(samuel): add logic for higher dims
+        changes = self.order - np.arange(4)
+        error_msg = 'only two dims can be transposed at a time'
+        assert (changes == 0).sum() <= 2, error_msg
+        error_msg = 'only tranpose along first dimensions currently supported'
+        assert np.array_equal(np.where(changes != 0)[0], [0, 1]), error_msg
+        dim0 = np.where(self.order == 0)[0][0]
+        dim1 = np.where(self.order == 1)[0][0]
+        return 'torch.tranpose({{}}, {}, {})'.format(dim0, dim1)
+
+class Reshape(PlaceHolder):
+    """A class that represents the torch.view() operation"""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        shape = self.block['shape']
+        if (shape == 0).all(): # if shape is an array of zeroes, no reshape occurs
+            self.blank = True # ensure that no output is produced
+        else:
+            import ipdb ; ipdb.set_trace()
+
+    def __repr__(self):
+        import ipdb ; ipdb.set_trace()
         #TODO(samuel): add logic for higher dims
         changes = self.order - np.arange(4)
         error_msg = 'only two dims can be transposed at a time'
@@ -441,3 +494,13 @@ def lower_first_letter(s):
     if len(s) > 1:
         base += s[1:]
     return ''.join(base)
+
+
+def merge_two_dicts(a, b):
+    """Merge the contents of two dictionaries into a single dictionary.
+
+    NOTE: This function is primarily used to help with python2 compatibility
+    during argument parsing"""
+    z = a.copy()
+    z.update(b)
+    return z
