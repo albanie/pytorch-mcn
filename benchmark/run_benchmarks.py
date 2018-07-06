@@ -105,7 +105,8 @@ parser.add_argument('--refresh', dest='refresh', action='store_true',
 parser.add_argument('--remove-blacklist', dest='remove_blacklist',
                     action='store_true',
                     help=('evaluate on 2012 validation subset without including'
-                    'the 2014 list of blacklisted images'))
+                    'the 2014 list of blacklisted images (only applies to'
+                    'imagenet models)'))
 parser.set_defaults(gpus=None)
 parser.set_defaults(refresh=False)
 parser.set_defaults(remove_blacklist=False)

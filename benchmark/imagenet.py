@@ -17,7 +17,7 @@ import torch.nn.parallel
 import torch.utils.data
 import torch.backends.cudnn as cudnn
 import torchvision.datasets as datasets
-import torchvision.transforms as transforms
+import benchmark_utils
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
@@ -41,39 +41,13 @@ def imagenet_benchmark(model, data_dir, res_cache, refresh_cache,
     else:
         subset = 'val'
     valdir = os.path.join(data_dir, subset)
-    preproc_transforms = compose_transforms(meta)
+    preproc_transforms = benchmark_utils.compose_transforms(meta)
     val_loader = torch.utils.data.DataLoader(
         datasets.ImageFolder(valdir, preproc_transforms),
         batch_size=batch_size, shuffle=False,
         num_workers=num_workers, pin_memory=True)
     prec1, prec5, speed = validate(val_loader, model)
     torch.save({'prec1': prec1, 'prec5': prec5, 'speed': speed}, res_cache)
-
-def compose_transforms(meta):
-    """Compose preprocessing transforms for model
-
-    The imported models use a range of different preprocessing options,
-    depending on how they were originally trained. Models trained in MatConvNet
-    typically require input images that have been scaled to [0,255], rather
-    than the [0,1] range favoured by PyTorch.
-
-    Args:
-        meta (dict): model preprocessing requirements
-
-    Return:
-        (transforms.Compose): Composition of preprocessing transforms
-    """
-    normalize = transforms.Normalize(mean=meta['mean'], std=meta['std'])
-    im_size = meta['imageSize']
-    assert im_size[0] == im_size[1], 'expected square image size'
-    resize_target = int((256/224) * max(im_size[:2]))
-    transform_list = [transforms.Resize(resize_target),
-                      transforms.CenterCrop(im_size[0]),
-                      transforms.ToTensor()]
-    if meta['std'] == [1,1,1]: # common amongst mcn models
-        transform_list.append(lambda x: x * 255.0)
-    transform_list.append(normalize)
-    return transforms.Compose(transform_list)
 
 def validate(val_loader, model):
     model.eval()
