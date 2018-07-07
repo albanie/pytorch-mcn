@@ -1,4 +1,5 @@
 __pycache__
+*.pyc
 
 # Data folders
 feats
@@ -9,3 +10,7 @@ imported
 DEV-NOTES.md
 compare/qq.sh
 misc
+
+ijba
+ijba-feats
+ijba-feats-matlab
