@@ -6,8 +6,8 @@ as a sanity check when importing models from MatConvNet into PyTorch.
 """
 
 import os
+import six
 import argparse
-import importlib.util
 import numpy as np
 import torch
 from torch.autograd import Variable
@@ -112,12 +112,19 @@ mcn_feat_path = os.path.join(feat_dir, '{}-feats.mat'.format(model_name))
 model_def_path = os.path.join(output_dir, model_name +'.py')
 weights_path = os.path.join(output_dir, model_name + '.pth')
 
-# import module
-spec = importlib.util.spec_from_file_location(model_name, model_def_path)
-mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
+# import module (uses different approaches for Python2/3)
+if six.PY3:
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(model_name, model_def_path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+else:
+    import importlib, sys
+    dirname = os.path.dirname(model_def_path)
+    sys.path.insert(0, dirname)
+    module_name = os.path.splitext(os.path.basename(model_def_path))[0]
+    mod = importlib.import_module(module_name)
+
 func = getattr(mod, model_name)
 net = func(weights_path=weights_path)
-
-# verify features
-compare_network_features(net, mcn_feat_path)
+compare_network_features(net, mcn_feat_path) # verify features
