@@ -62,7 +62,7 @@ def show_diffs(mcn_vars, py_vars):
         x = x.view(x.size(0), -1)
         x_ = x_.view(x_.size(0), -1)
         diff = torch.sum(torch.abs(x) - torch.abs(x_))/torch.sum(torch.abs(x))
-        print('{} diff: {:.3g}'.format(varname, diff.data[0]))
+        print('{} diff: {:.3g}'.format(varname, diff.item()))
 
 def compare_network_features(net, mcn_feat_path):
     """Compare features computed by networks in each framework.
