@@ -62,6 +62,7 @@ function generateFeats(modelPath, destPath, varargin)
   opts = vl_argparse(opts, varargin) ;
 
   net = load(modelPath) ;
+  if isfield(net, 'net'), net = net.net ; end
   net = fixBackwardsCompatibility(net) ;
   dag = dagnn.DagNN.loadobj(net) ;
   dag.conserveMemory = false ;

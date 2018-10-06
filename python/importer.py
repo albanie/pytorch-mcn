@@ -45,13 +45,14 @@ def load_mcn_net(path):
         (dict): a native Python dictionary containg the network parameters,
         layers and meta information.
     """
-    mcn = sio.loadmat(path)
+    mcn = sio.loadmat(path, squeeze_me=False)
     for key in ['meta', 'params', 'layers']: assert key in mcn.keys()
     mcn_net = {
         'meta': pmu.parse_struct(mcn['meta']),
         'params': pmu.parse_struct(mcn['params']),
         'layers': pmu.parse_struct(mcn['layers']),
     }
+    mcn_net = pmu.fix_spio_issues(mcn_net)
     mcn_net = pmu.align_interfaces(mcn_net)
     return mcn_net
 
@@ -83,7 +84,6 @@ def flatten_if_needed(nodes, complete_dag, is_flattened, flatten_layer):
         flatten_condition = (flatten_layer == 'last' and complete_dag) \
                 or (flatten_layer == prev['name'])
         if flatten_condition:
-            # import ipdb ; ipdb.set_trace()
             # TODO(samuel): Make network surgery more robust (it currently
             # relies on a unique variable naming modification to maintain a
             # consistent execution order)
@@ -174,25 +174,22 @@ def extract_dag(mcn_net, drop_prob_softmax=True, in_ch=3, flatten_layer='last',
         block = mcn_net['layers']['block'][ii]
         opts = {'block': block, 'block_type': bt}
         in_chs = [in_ch_store[x] for x in node['inputs']]
-        # if node['outputs'] == 'res2c_local': import ipdb; ipdb.set_trace()
-        # if node['name'] == 'res2c_relu_local': import ipdb ; ipdb.set_trace()
+        out_chs = in_chs # by default, maintain the same number of channels
         if bt == 'dagnn.Conv':
             msg = 'conv layers should only take a single_input'
+            if len(in_chs) != 1:
+                import ipdb ; ipdb.set_trace()
             assert len(in_chs) == 1, msg
             mod, out_ch = pmu.conv2d_mod(block, in_chs[0], is_flattened, **kwargs)
             out_chs = [out_ch]
         elif bt == 'dagnn.BatchNorm':
             mod = pmu.batchnorm2d_mod(block, mcn_net, params)
-            out_chs = in_chs
         elif bt == 'dagnn.GlobalPooling':
-            mod = pmu.globalpool_mod(block, mcn_net, params)
-            out_chs = in_chs
+            mod = pmu.globalpool_mod(block)
         elif bt == 'dagnn.ReLU':
             mod = nn.ReLU()
-            out_chs = in_chs
         elif bt == 'dagnn.Sigmoid':
             mod = nn.Sigmoid()
-            out_chs = in_chs
         elif bt == 'dagnn.Pooling':
             pad, ceil_mode = pmu.convert_padding(block['pad'])
             pool_opts = {'kernel_size': pmu.int_list(block['poolSize']),
@@ -208,23 +205,21 @@ def extract_dag(mcn_net, drop_prob_softmax=True, in_ch=3, flatten_layer='last',
             else:
                 msg = 'unknown pooling type: {}'.format(block['method'])
                 raise ValueError(msg)
-            out_chs = in_chs
         elif bt == 'dagnn.DropOut': # both frameworks use p=prob(zeroed)
             mod = nn.Dropout(p=block['rate'])
-            out_chs = in_chs
         elif bt == 'dagnn.Permute':
             mod = pmu.Permute(**opts)
-            out_chs = in_chs
         elif bt == 'dagnn.Reshape':
             mod = pmu.Reshape(**opts)
-            out_chs = in_chs
+        elif bt == 'dagnn.Axpy':
+            mod = pmu.Axpy(**opts)
         elif bt == 'dagnn.Flatten':
             mod = pmu.Flatten(**opts)
             is_flattened = True
             out_chs = [1]
         elif bt == 'dagnn.Concat':
             mod = pmu.Concat(**opts)
-            out_chs = sum(in_chs)
+            out_chs = [sum(in_chs)]
         elif bt == 'dagnn.Sum':
             mod = pmu.Sum(**opts)
             out_chs = [in_chs[0]] # (all input channels must be the same)
@@ -232,13 +227,11 @@ def extract_dag(mcn_net, drop_prob_softmax=True, in_ch=3, flatten_layer='last',
             mod = pmu.AffineGridGen(height=block['Ho'],
                                     width=block['Wo'],
                                     **opts)
-            out_chs = in_chs
             uses_functional = True
         elif bt == 'dagnn.BilinearSampler':
             mod = pmu.BilinearSampler(**opts)
-            out_chs = in_chs
             uses_functional = True
-        elif bt == 'dagnn.Loss':
+        elif bt in ['dagnn.Loss', 'dagnn.SoftmaxCELoss']:
             if kwargs['verbose']:
                 print('skipping loss layer: {}'.format(node['name']))
             continue
@@ -280,8 +273,9 @@ def ensure_compatible_repr(mod):
     return repr_str
 
 class Network(nn.Module):
-    def __init__(self, name, mcn_net, meta, uses_functional, debug_mode=True):
-        super().__init__()
+    def __init__(self, name, mcn_net, meta, uses_functional, flatten_layer,
+                 debug_mode=True):
+        super(Network, self).__init__()
         self.name = pmu.capitalize_first_letter(name)
         self.attr_str = []
         self.meta = meta
@@ -292,6 +286,7 @@ class Network(nn.Module):
         self.output_vars = ['data']
         self.forward_debug_str = []
         self.debug_mode = debug_mode
+        self.flatten_layer = flatten_layer
 
     def indenter(self, x, depth=2):
         num_spaces = 4
@@ -327,8 +322,6 @@ class Network(nn.Module):
         if not isinstance(mod, pmu.PlaceHolder):
             mod_str = ensure_compatible_repr(mod)
             self.attr_str += ['self.{} = nn.{}'.format(name, mod_str)]
-        elif mod.blank:
-            return # do not add anything to the architecture
         outs = ','.join(outputs)
         ins = ','.join(inputs)
         if not self.input_vars: self.input_vars = ins
@@ -373,14 +366,21 @@ class Network(nn.Module):
                 raise ValueError('unexpected number of params')
             val_idx = self.mcn_net['params']['name'].index(param_name)
             weights = self.mcn_net['params']['value'][val_idx]
-            state_dict[key] = pmu.weights2tensor(weights)
+            # We follow the PyTorch convention of squeezing the weights used
+            # in a linear layer, so that rather than using a shape like
+            # (K,N,1,1), they are "squeezed" to a matrix with shape (K,N)
+            if 'Linear' in mod_str:
+                squeeze = True
+            else:
+                squeeze = False
+            state_dict[key] = pmu.weights2tensor(weights, squeeze=squeeze)
 
     def transcribe(self, depth=2):
         """generate pytorch source code for the model"""
         assert self.input_vars, 'input vars must be set before transcribing'
-        arch = sg.build_header_str(self.name, **self.meta,
+        arch = sg.build_header_str(self.name,
                                    uses_functional=self.uses_functional,
-                                   debug_mode=self.debug_mode)
+                                   debug_mode=self.debug_mode, **self.meta)
         for x in self.attr_str:
             arch += self.indenter(x, depth)
         arch += sg.build_forward_str(self.input_vars)
@@ -502,9 +502,20 @@ def build_network(mcn_path, name, flatten_layer, debug_mode, pt_norm, verbose):
     nodes = simplify_dag(nodes)
     state_dict = OrderedDict()
     net = Network(name, mcn_net, meta, uses_functional=uses_functional,
-                  debug_mode=debug_mode)
-    for node in nodes:
-        net.add_mod(**node, state_dict=state_dict)
+                  debug_mode=debug_mode, flatten_layer=flatten_layer)
+    for ii, node in enumerate(nodes):
+        print(ii, node['name'])
+        net.add_mod(state_dict=state_dict, **node)
+
+    # As a convenience, return final embedding together with classifier
+    # where possible. This is only performed when flattening occurs at
+    # the end of the network, where its fairly obvious how the network has
+    # been designed (otherwise, the network definition is probably going to
+    # be easier to modify by hand).
+    if net.output_vars == ['classifier']:
+        if '_preflatten' in nodes[-2]['outputs'][0]:
+            net.output_vars.extend(nodes[-3]['outputs']) # append embedding
+
     return net, state_dict
 
 def import_model(mcn_model_path, output_dir, refresh, **kwargs):

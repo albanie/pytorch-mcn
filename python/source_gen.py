@@ -40,7 +40,7 @@ import torch.nn.functional as F
 class {0}(nn.Module):
 
     def __init__(self):
-        super().__init__()
+        super({0}, self).__init__()
         self.meta = {{'mean': {1},
                      'std': {2},
                      'imageSize': {3}}}

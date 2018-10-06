@@ -74,6 +74,25 @@ def conv2d_mod(block, in_ch, is_flattened, verbose):
         mod = nn.Conv2d(**conv_opts)
     return mod, fsize[3]
 
+def fix_spio_issues(mcn_net):
+    """Modify data structures that have been loaded using scipy.io.loadmat
+
+    The purpose of this function is to address an issue with loadmat, by which
+    it does not always consistently produce the same array dimensions
+    for objects stored in .mat files. Specifically, the level of nesting
+    for the final element in a structure array can differ from previous
+    elements, so we apply a sanity check and fix resulting issues in this
+    function.
+    """
+    states = ['inputs', 'outputs']
+    for state in states:
+        tmp = mcn_net['layers'][state]
+        for idx, elem in enumerate(tmp):
+            if not isinstance(elem, list):
+                tmp[idx] = [elem]
+        mcn_net['layers'][state] = tmp
+    return mcn_net
+
 def align_interfaces(mcn_net, remap_aff_gen=True):
     """Modify layer inputs/outputs to match pytorch conventions
 
@@ -114,7 +133,7 @@ def align_interfaces(mcn_net, remap_aff_gen=True):
     mcn_net['layers']['inputs'][aff_idx].append(feat_name)
     return mcn_net
 
-def batchnorm2d_mod(block, mcn_net, param_names):
+def batchnorm2d_mod(block, mcn_net, param_names, epsilon=1e-5):
     """Build a torch BatcNnorm2d module from a matconvnet BatchNorm block
 
     PyTorch batch normalization blocks require knowledge of the number of
@@ -128,6 +147,8 @@ def batchnorm2d_mod(block, mcn_net, param_names):
         mcn_net (dict) : the full mcn network, stored in memory
         param_names (List[str]): the names of the parameters associated with
           the mcn batch norm layer.
+        epsilon (float) [1e-5]: use dagnn default batchnorm eps value, if none
+          is provided.
 
     Returns:
         nn.BatchNorm2d : the corresponding PyTorch batch norm module
@@ -136,7 +157,9 @@ def batchnorm2d_mod(block, mcn_net, param_names):
     val_idx = mcn_net['params']['name'].index(moment_names)
     moments = mcn_net['params']['value'][val_idx]
     num_channels = moments.shape[0]
-    mod = nn.BatchNorm2d(num_channels, eps=block['epsilon'])
+    if 'epsilon' in block:
+        epsilon = block['epsilon']
+    mod = nn.BatchNorm2d(num_channels, eps=epsilon)
     return mod
 
 def update_bnorm_moments(name, param_name, mcn_net, eps, state_dict):
@@ -193,18 +216,25 @@ def parse_struct(x):
                      utility.
     Returns:
         nested dictionary of parsed data
+
+    NOTE: To ensure compatibility with both Python2 and Python3, both
+    `np.unicode_` (Python2) and `np.str_` (Python3) are included as scalar
+    types.
     """
     # handle scalar base cases for recursion
-    scalar_types = [np.str_, np.uint8, np.uint16, np.int64, np.float32, np.float64]
+    scalar_types = [np.str_, np.unicode_, np.uint8, np.uint16,
+                    np.int64, np.float32, np.float64]
     if x.dtype.type in scalar_types:
         if x.size == 1: x = x.flatten() ; x = x[0] # flatten scalars
         return x
-    fieldnames = [tup[0] for tup in x.dtype.descr]
-    parsed = {f:[] for f in fieldnames}
-    if any([dim == 0 for dim in x.shape]) or \
-        (x.size == 1 and x.flatten()[0] is None):
-        return parsed #only recurse on valid storage shapes
-    if fieldnames == ['']:
+    data_is_empty = any([dim == 0 for dim in x.shape]) or \
+                            (x.size == 1 and x.flatten()[0] is None)
+    if data_is_empty:
+        return  [] # only recurse on valid storage shapes
+    elif x.dtype.names:
+        fieldnames = list(x.dtype.names)
+        parsed = {f:[] for f in fieldnames}
+    else:
         return [elem[0] for elem in x.flatten()] # prevent blank nesting
     for f_idx, fname in enumerate(fieldnames):
         x = x.flatten() #implify logic via linear index
@@ -305,15 +335,11 @@ class PlaceHolder(object):
     """A placeholder class for pytorch operations that are defined through
     code execution, rather than as nn modules
 
-    Args:
-        blank (bool) [False]: if True, the placeholder will produce no output
-        in the final network architecture.
     Kwargs:
         All kwargs are set as attributes on the object.
     """
 
-    def __init__(self, blank=False, **kwargs):
-        self.blank = blank
+    def __init__(self, **kwargs):
         for key, val in kwargs.items():
             setattr(self, key, val)
 
@@ -324,7 +350,7 @@ class Concat(PlaceHolder):
     """A class that represents the torch.cat() operation"""
 
     def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+        super(Concat, self).__init__(**kwargs)
         mcn_order = [4, 3, 1, 2] #¬nsform cat dimension
         self.dim = mcn_order.index(int(self.block['dim']))
 
@@ -340,9 +366,6 @@ class Sum(PlaceHolder):
 
 class Flatten(PlaceHolder):
     """A class that represents the torch tesnor.view() operation"""
-
-    def __init__(self, **kwargs):
-        pass # void calling super
 
     def __repr__(self):
         return '{0}.view({0}.size(0), -1)'
@@ -363,7 +386,7 @@ class AffineGridGen(PlaceHolder):
     to as an extra input to this layer.
     """
     def __init__(self, height, width, dummy_channels=3, **kwargs):
-        super().__init__(**kwargs)
+        super(AffineGridGen, self).__init__(**kwargs)
         self.size = (1, dummy_channels, height, width)
 
     def __repr__(self):
@@ -377,31 +400,11 @@ class BilinearSampler(PlaceHolder):
     def __repr__(self):
         return "F.grid_sample({0}, {1}, mode='bilinear')"
 
-#class GlobalPooling(PlaceHolder):
-#    """A class that represents the Global Pooling 2d operation"""
-#
-#    def __init__(self, pad=0, dilate=(1,1), method='avg', stride=(1, 1),
-#                 **kwargs):
-#        if isinstance(pad, np.ndarray) and pad.sum() == 0:
-#            pad = 0 # use common format
-#        method = method.lower()
-#        assert method in ['avg', 'max'], 'unrecognised pooling method'
-#        if isinstance(stride, np.ndarray) and (stride == 1).all():
-#            stride = 1
-#        super().__init__(**kwargs)
-#        self.pad = pad
-#        self.stride = stride
-#        self.method = method
-#
-#    def __repr__(self):
-#        return "nn.{}_pool2d({{0}}, {{0}}.size()[2:], stride={}, padding={})"\
-#                .format(self.method, self.stride, self.pad)
-
 class Permute(PlaceHolder):
     """A class that represents the torch.tranpose() operation"""
 
     def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+        super(Permute, self).__init__(**kwargs)
         self.order = self.block['order'].flatten() - 1 # fix 1-indexing
 
     def __repr__(self):
@@ -416,49 +419,50 @@ class Permute(PlaceHolder):
         dim1 = np.where(self.order == 1)[0][0]
         return 'torch.tranpose({{}}, {}, {})'.format(dim0, dim1)
 
+class Axpy(PlaceHolder):
+    """A class that represents the blas axpy operation"""
+
+    def __repr__(self):
+        return '{0}.expand_as({1}) * {1} + {2}'
+
 class Reshape(PlaceHolder):
     """A class that represents the torch.view() operation"""
 
     def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        shape = self.block['shape']
-        if (shape == 0).all(): # if shape is an array of zeroes, no reshape occurs
-            self.blank = True # ensure that no output is produced
-        else:
-            import ipdb ; ipdb.set_trace()
+        super(Reshape, self).__init__(**kwargs)
+        self.shape = self.block['shape']
 
     def __repr__(self):
-        import ipdb ; ipdb.set_trace()
-        #TODO(samuel): add logic for higher dims
-        changes = self.order - np.arange(4)
-        error_msg = 'only two dims can be transposed at a time'
-        assert (changes == 0).sum() <= 2, error_msg
-        error_msg = 'only tranpose along first dimensions currently supported'
-        assert np.array_equal(np.where(changes != 0)[0], [0, 1]), error_msg
-        dim0 = np.where(self.order == 0)[0][0]
-        dim1 = np.where(self.order == 1)[0][0]
-        return 'torch.tranpose({{}}, {}, {})'.format(dim0, dim1)
+        if (self.shape == 0).all():
+            # if `shape` is array of zeroes, no reshape occurs
+            return '{}' # return an assigment op
 
-def weights2tensor(x):
+        import ipdb ; ipdb.set_trace()
+        raise NotImplementedError('not yet implemented')
+
+def weights2tensor(x, squeeze=False):
     """Adjust memory layout and load weights as torch tensor
 
     Args:
         x (ndaray): a numpy array, corresponding to a set of network weights
-        stored in column major order
+           stored in column major order
+        squeeze (bool) [False]: whether to squeeze the tensor (i.e. remove
+           singletons from the trailing dimensions. So after converting to
+           pytorch layout (C_out, C_in, H, W), if the shape is (A, B, 1, 1)
+           it will be reshaped to a matrix with shape (A,B).
 
     Returns:
         torch.tensor: a permuted sets of weights, matching the pytorch layout
         convention
     """
     if x.ndim == 4:
-        if x.shape[:2] == (1,1): # linear layers
-            x = x[0,0,:,:].T
-        else:
-            x = x.transpose((3, 2, 0, 1))
+        x = x.transpose((3, 2, 0, 1))
     elif x.ndim == 2:
         if x.shape[1] == 1:
             x = x.flatten()
-    return torch.from_numpy(x)
+    if squeeze:
+        x = np.squeeze(x)
+    return torch.from_numpy(np.ascontiguousarray(x))
 
 def capitalize_first_letter(s):
     """Capitalize (only) the first character of a string
