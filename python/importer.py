@@ -370,10 +370,17 @@ class Network(nn.Module):
             # in a linear layer, so that rather than using a shape like
             # (K,N,1,1), they are "squeezed" to a matrix with shape (K,N)
             if 'Linear' in mod_str:
-                squeeze = True
+                if weights.ndim > 1 and weights.shape[1] > 1:
+                    kwargs = {
+                        "squeeze": True,
+                        "in_features": mod.in_features,
+                        "out_features": mod.out_features,
+                    }
+                else:
+                    kwargs = {"squeeze": True}
             else:
-                squeeze = False
-            state_dict[key] = pmu.weights2tensor(weights, squeeze=squeeze)
+                kwargs = {"squeeze": False}
+            state_dict[key] = pmu.weights2tensor(weights, **kwargs)
 
     def transcribe(self, depth=2):
         """generate pytorch source code for the model"""

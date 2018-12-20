@@ -58,9 +58,13 @@ def conv2d_mod(block, in_ch, is_flattened, verbose):
     stride = tuple(int_list(block['stride']))
     assert len(fsize) == 4, 'expected four dimensions'
     pad, _ = convert_padding(block['pad'])
-    if fsize[:2] == [1,1] and is_flattened:
+    if is_flattened:
         assert pad == 0, 'padding must be zero for linear layers'
-        mod = nn.Linear(fsize[2], fsize[3], bias=bool(block['hasBias']))
+        mod = nn.Linear(
+            in_features=np.prod(fsize[:3]),
+            out_features=fsize[3],
+            bias=bool(block['hasBias'])
+        )
     else:
         msg = 'valid convolution groups cannot be formed from filters'
         valid_conv_groups = int(in_ch / fsize[2]) == (in_ch / fsize[2])
@@ -440,7 +444,7 @@ class Reshape(PlaceHolder):
         import ipdb ; ipdb.set_trace()
         raise NotImplementedError('not yet implemented')
 
-def weights2tensor(x, squeeze=False):
+def weights2tensor(x, squeeze=False, in_features=None, out_features=None):
     """Adjust memory layout and load weights as torch tensor
 
     Args:
@@ -450,6 +454,8 @@ def weights2tensor(x, squeeze=False):
            singletons from the trailing dimensions. So after converting to
            pytorch layout (C_out, C_in, H, W), if the shape is (A, B, 1, 1)
            it will be reshaped to a matrix with shape (A,B).
+        in_features (int :: None): used to reshape weights for a linear block.
+        out_features (int :: None): used to reshape weights for a linear block.
 
     Returns:
         torch.tensor: a permuted sets of weights, matching the pytorch layout
@@ -461,6 +467,8 @@ def weights2tensor(x, squeeze=False):
         if x.shape[1] == 1:
             x = x.flatten()
     if squeeze:
+        if in_features and out_features:
+            x = x.reshape((out_features, in_features))
         x = np.squeeze(x)
     return torch.from_numpy(np.ascontiguousarray(x))
 
