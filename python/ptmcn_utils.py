@@ -166,6 +166,7 @@ def batchnorm2d_mod(block, mcn_net, param_names, epsilon=1e-5):
     mod = nn.BatchNorm2d(num_channels, eps=epsilon)
     return mod
 
+
 def update_bnorm_moments(name, param_name, mcn_net, eps, state_dict):
     """Convert matconvnet batch norm moments into PyTorch equivalents
 
@@ -175,12 +176,12 @@ def update_bnorm_moments(name, param_name, mcn_net, eps, state_dict):
     are stored as columns in a single mcn parameter array.
 
     PyTorch uses a slightly different formula for batch norm than
-	mcn at test time (which incorporates the `eps` values during training
+    mcn at test time (which incorporates the `eps` values during training
     rather than during inference):
-	pytorch:
-	   y = ( x - mean(x)) / (sqrt(var(x)) + eps) * gamma + beta
-	mcn:
-	   y = ( x - mean(x)) / sqrt(var(x)) * gamma + beta
+        pytorch:
+        y = ( x - mean(x)) / (sqrt(var(x)) + eps) * gamma + beta
+        mcn:
+        y = ( x - mean(x)) / sqrt(var(x)) * gamma + beta
 
     Args:
         name (str): the name of the bnorm layer to be processed
@@ -198,10 +199,11 @@ def update_bnorm_moments(name, param_name, mcn_net, eps, state_dict):
     key = '{}.running_mean'.format(name)
     running_mean = moments[:, 0]
     state_dict[key] = weights2tensor(running_mean)
-    running_vars = (moments[:,1] ** 2) - eps
+    running_vars = (moments[:, 1] ** 2) - eps
     key = '{}.running_var'.format(name)
     state_dict[key] = weights2tensor(running_vars)
     return state_dict
+
 
 def parse_struct(x):
     """Extract nested dict data structure from matfile struct layout

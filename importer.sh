@@ -9,34 +9,22 @@
 
 # set paths/options
 refresh_models=true
-debug_mode=false
 use_ipython=true
 mcn_import_dir="~/data/models/matconvnet"
 output_dir="~/data/models/pytorch/mcn_imports"
 verbose=false
 
+# Convert ReLU modules to run "in place"
+inplace=true
+
+# enforce python2 usage (useful for ensuring backwards compatibility)
+enforce_python2=false
+
 # verification options
-verify_model=false
+debug_mode=false # adds additional layers for clarity and verfies features
 feat_dir="~/data/pt/pytorch-mcn/feats"
 
 # Declare list of models to be imported (comment/uncomment selection to run)
-declare -a model_list=("squeezenet1_0-pt-mcn"
-                       "squeezenet1_1-pt-mcn"
-                       "alexnet-pt-mcn"
-                       "vgg11-pt-mcn"
-                       "vgg13-pt-mcn"
-                       "vgg16-pt-mcn"
-                       "vgg19-pt-mcn"
-                       "resnet18-pt-mcn"
-                       "resnet34-pt-mcn"
-                       "resnet50-pt-mcn"
-                       "resnet101-pt-mcn"
-                       "resnet152-pt-mcn"
-                       "inception_v3-pt-mcn"
-                       "densenet121-pt-mcn"
-                       "densenet161-pt-mcn"
-                       "densenet169-pt-mcn"
-                       "densenet201-pt-mcn")
 
 # Examples of models that require the user to provide the location of a
 # "flatten" operation (which corresponds to the pytorch module after which
@@ -56,15 +44,60 @@ declare -a model_list=("vd16_offtheshelf_conv5_3_max-dag"
 # Pedestrian Alignment Network
 declare -a model_list=("ped_align")
 
+#declare -a model_list=("imagenet-vgg-f-dag relu6")
+#
+## face descriptors
+declare -a model_list=("vgg_face-dag")
+#
+## face descriptors
+declare -a model_list=(
+"senet50_scratch-dag"
+"resnet50_scratch-dag"
+"resnet50_ft-dag"
+"senet50_ft-dag"
+)
+#"resnet50_scratch-dag"
+
+#"se50_128D-ft"
+declare -a model_list=(
+"res50_128D-ft"
+)
+
+# imagenet models
+declare -a model_list=("squeezenet1_0-pt-mcn"
+                       "squeezenet1_1-pt-mcn"
+                       "alexnet-pt-mcn"
+                       "vgg11-pt-mcn"
+                       "vgg13-pt-mcn"
+                       "vgg16-pt-mcn"
+                       "vgg19-pt-mcn"
+                       "resnet18-pt-mcn"
+                       "resnet34-pt-mcn"
+                       "resnet50-pt-mcn"
+                       "resnet101-pt-mcn"
+                       "resnet152-pt-mcn"
+                       "inception_v3-pt-mcn"
+                       "densenet121-pt-mcn"
+                       "densenet161-pt-mcn"
+                       "densenet169-pt-mcn"
+                       "densenet201-pt-mcn")
+
 # Emotion recognition models
-declare -a model_list=("alexnet-face-bn-dag"
-					   "alexnet-face-fer-bn-dag"
-					   "vgg-m-face-bn-dag"
-					   "vgg-vd-face-fer-dag"
-					   "vgg-vd-face-sfew-dag"
-					   "resnet50-face-bn-dag"
-					   "resnet50-face-sfew-dag"
+# NOTE: For some models, we flatten after relu7 to avoid flattening before a
+# batch norm layer.
+declare -a model_list=("alexnet-face-fer-bn-dag relu7"
+					   "vgg-m-face-bn-fer-dag relu7"
+					   "vgg-vd-face-fer-dag relu6"
+					   "vgg-vd-face-sfew-dag relu6"
+					   "resnet50-face-sfew-dag prediction_avg"
                        )
+
+declare -a model_list=("resnet50-ferplus-dag pool5_7x7_s1"
+					   "senet50-ferplus-dag pool5_7x7_s1"
+                       )
+# dev
+#declare -a model_list=("resnet50-ferplus-dag pool5_7x7_s1")
+declare -a model_list=("vgg_face-dag pool5")
 
 pushd `dirname $0` > /dev/null
 SCRIPTPATH=`pwd`
@@ -75,11 +108,21 @@ function convert_model()
     mcn_model_path=$1
     flatten_layer=$2
 	echo "Exporting MatConvNet model to PyTorch (may take some time)..."
-    if [ $use_ipython = true ] ; then
-        converter="ipython3 $SCRIPTPATH/python/importer.py --"
+
+    if [ $enforce_python2 = true ] ; then
+        if [ $use_ipython = true ] ; then
+            binary="ipython2"
+        else
+            binary="python2"
+        fi
     else
-        converter="python3 $SCRIPTPATH/python/importer.py"
+        if [ $use_ipython = true ] ; then
+            binary="ipython3"
+        else
+            binary="python3"
+        fi
     fi
+    converter="${binary} $SCRIPTPATH/python/importer.py --"
     if [ $refresh_models = true ] ; then
         opts="--refresh"
     fi
@@ -89,12 +132,15 @@ function convert_model()
     if [ $verbose = true ] ; then
         opts="$opts --verbose"
     fi
+    if [ $inplace = true ] ; then
+        opts="$opts --inplace"
+    fi
     if [ ! -z "$flatten_layer" ] ; then
         opts="$opts --flatten_layer ${flatten_layer}"
     fi
     $converter $mcn_model_path $output_dir $opts
 
-    if [ $verify_model = true ] ; then
+    if [ $debug_mode = true ] ; then
         if [ $use_ipython = true ] ; then
             verifier="ipython $SCRIPTPATH/compare/compare_models.py --"
         else

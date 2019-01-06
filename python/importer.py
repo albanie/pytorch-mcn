@@ -115,8 +115,9 @@ def flatten_if_needed(nodes, complete_dag, is_flattened, flatten_layer):
         # else:
     return nodes, is_flattened
 
-def extract_dag(mcn_net, drop_prob_softmax=True, in_ch=3, flatten_layer='last',
-                **kwargs):
+
+def extract_dag(mcn_net, inplace, drop_prob_softmax=True, in_ch=3,
+                flatten_layer='last', **kwargs):
     """Extract DAG nodes from stored matconvnet network
 
     Transform a stored mcn dagnn network structure into a Directed Acyclic
@@ -143,6 +144,7 @@ def extract_dag(mcn_net, drop_prob_softmax=True, in_ch=3, flatten_layer='last',
           processed by the network.
         flatten (str) [last]: the layer after which a "flatten" operation
           should be inserted (if one is not present in the matconvnet network).
+        inplace (bool): whether to convert ReLU modules to run "in place".
 
     Keyword Args:
         verbose (bool): whether to display more detailed information during the
@@ -160,10 +162,11 @@ def extract_dag(mcn_net, drop_prob_softmax=True, in_ch=3, flatten_layer='last',
     is_flattened = False
     uses_functional = False
     num_layers = len(mcn_net['layers']['name'])
-    in_ch_store = defaultdict(lambda: in_ch) # track the channels
+    in_ch_store = defaultdict(lambda: in_ch)  # track the channels
     for ii in range(num_layers):
         params = mcn_net['layers']['params'][ii]
-        if params == {'': []}: params = None
+        if params == {'': []}:
+            params = None
         node = {
             'name': mcn_net['layers']['name'][ii],
             'inputs': mcn_net['layers']['inputs'][ii],
@@ -174,20 +177,21 @@ def extract_dag(mcn_net, drop_prob_softmax=True, in_ch=3, flatten_layer='last',
         block = mcn_net['layers']['block'][ii]
         opts = {'block': block, 'block_type': bt}
         in_chs = [in_ch_store[x] for x in node['inputs']]
-        out_chs = in_chs # by default, maintain the same number of channels
+        out_chs = in_chs  # by default, maintain the same number of channels
         if bt == 'dagnn.Conv':
             msg = 'conv layers should only take a single_input'
             if len(in_chs) != 1:
                 import ipdb ; ipdb.set_trace()
             assert len(in_chs) == 1, msg
-            mod, out_ch = pmu.conv2d_mod(block, in_chs[0], is_flattened, **kwargs)
+            mod, out_ch = pmu.conv2d_mod(block, in_chs[0], is_flattened,
+                                         **kwargs)
             out_chs = [out_ch]
         elif bt == 'dagnn.BatchNorm':
             mod = pmu.batchnorm2d_mod(block, mcn_net, params)
         elif bt == 'dagnn.GlobalPooling':
             mod = pmu.globalpool_mod(block)
         elif bt == 'dagnn.ReLU':
-            mod = nn.ReLU()
+            mod = nn.ReLU(inplace=inplace)
         elif bt == 'dagnn.Sigmoid':
             mod = nn.Sigmoid()
         elif bt == 'dagnn.Pooling':
@@ -205,7 +209,7 @@ def extract_dag(mcn_net, drop_prob_softmax=True, in_ch=3, flatten_layer='last',
             else:
                 msg = 'unknown pooling type: {}'.format(block['method'])
                 raise ValueError(msg)
-        elif bt == 'dagnn.DropOut': # both frameworks use p=prob(zeroed)
+        elif bt == 'dagnn.DropOut':  # both frameworks use p=prob(zeroed)
             mod = nn.Dropout(p=block['rate'])
         elif bt == 'dagnn.Permute':
             mod = pmu.Permute(**opts)
@@ -222,7 +226,7 @@ def extract_dag(mcn_net, drop_prob_softmax=True, in_ch=3, flatten_layer='last',
             out_chs = [sum(in_chs)]
         elif bt == 'dagnn.Sum':
             mod = pmu.Sum(**opts)
-            out_chs = [in_chs[0]] # (all input channels must be the same)
+            out_chs = [in_chs[0]]  # (all input channels must be the same)
         elif bt == 'dagnn.AffineGridGenerator':
             mod = pmu.AffineGridGen(height=block['Ho'],
                                     width=block['Wo'],
@@ -235,23 +239,26 @@ def extract_dag(mcn_net, drop_prob_softmax=True, in_ch=3, flatten_layer='last',
             if kwargs['verbose']:
                 print('skipping loss layer: {}'.format(node['name']))
             continue
-        elif bt == 'dagnn.SoftMax' \
-            and (ii == num_layers -1) and drop_prob_softmax:
-            continue # remove softmax prediction layer
-        else: import ipdb ; ipdb.set_trace()
+        elif (bt == 'dagnn.SoftMax' and
+                (ii == num_layers - 1) and
+                drop_prob_softmax):
+            continue  # remove softmax prediction layer
+        else:
+            import ipdb ; ipdb.set_trace()
         for output, out_ch in zip(node['outputs'], out_chs):
             in_ch_store[output] = out_ch
         node['mod'] = mod
         nodes += [node]
-        complete_dag = (ii == num_layers -1)
+        complete_dag = (ii == num_layers - 1)
         nodes, is_flattened = flatten_if_needed(nodes, complete_dag,
                                                 is_flattened, flatten_layer)
     return nodes, uses_functional
 
+
 def ensure_compatible_repr(mod):
     """Fixes minor bug in __repr__ functions for certain modules (present in
-	older PyTorch versions). This function also ensures more consistent repr
-	str spacing.
+    older PyTorch versions). This function also ensures more consistent repr
+    str spacing.
 
     Args:
         mod (nn.Module): candidate module
@@ -260,17 +267,21 @@ def ensure_compatible_repr(mod):
         (str): modified, compatible __repr__ string for module
     """
     repr_str = str(mod)
-    repr_str = repr_str.replace('Conv2d (', 'Conv2d(') # fix spacing issue
+    repr_str = repr_str.replace('Conv2d (', 'Conv2d(')  # fix spacing issue
     if isinstance(mod, nn.MaxPool2d):
-        if not 'ceil_mode' in repr_str: # string manipulation to fix bug
+        if 'ceil_mode' not in repr_str:  # string manipulation to fix bug
             assert repr_str[-2:] == '))', 'unexpected repr format'
             repr_str = repr_str[:-1] + ', ceil_mode={})'.format(mod.ceil_mode)
     elif isinstance(mod, nn.Linear):
-        if not 'bias' in repr_str: # string manipulation to fix bug
+        if 'bias' not in repr_str:  # string manipulation to fix bug
             assert repr_str[-1:] == ')', 'unexpected repr format'
             bias = mod.bias is not None
             repr_str = repr_str[:-1] + ', bias={})'.format(bias)
+    elif isinstance(mod, nn.ReLU):
+        if mod.inplace:
+            repr_str = "ReLU(inplace=True)"
     return repr_str
+
 
 class Network(nn.Module):
     def __init__(self, name, mcn_net, meta, uses_functional, flatten_layer,
@@ -283,7 +294,7 @@ class Network(nn.Module):
         self.mcn_net = mcn_net
         self.uses_functional = uses_functional
         self.input_vars = None
-        self.output_vars = ['data']
+        self.output_vars = []
         self.forward_debug_str = []
         self.debug_mode = debug_mode
         self.flatten_layer = flatten_layer
@@ -324,15 +335,17 @@ class Network(nn.Module):
             self.attr_str += ['self.{} = nn.{}'.format(name, mod_str)]
         outs = ','.join(outputs)
         ins = ','.join(inputs)
-        if not self.input_vars: self.input_vars = ins
-        # track the outputs of the network
+        if not self.input_vars:
+            self.input_vars = ins
         self.output_vars = [v for v in self.output_vars if v not in inputs]
         self.output_vars.extend(outputs)
         if isinstance(mod, pmu.PlaceHolder):
+            """
+            To handle arbitrary numbers of inputs, pass arguments as
+            a joined string (python str formatter does not support the
+            ability to automate this)
+            """
             if isinstance(mod, pmu.Concat):
-                # To handle arbitrary numbers of inputs, pass arguments as
-                # a joined string (python str formatter does not support the
-                # ability to automate this)
                 func = str(mod).format(ins)
             else:
                 func = str(mod).format(*inputs)
@@ -345,7 +358,8 @@ class Network(nn.Module):
             template = "self.debug_feats['{0}'] = {0}.clone()"
             forward_debug_str = template.format(outs)
             self.forward_debug_str += [forward_debug_str]
-        if not params: return # module has no associated params
+        if not params:
+            return  # module has no associated params
         for idx, param_name in enumerate(params):
             if idx == 0:
                 key = '{}.weight'.format(name)
@@ -358,9 +372,13 @@ class Network(nn.Module):
                 std_sfx = any([params[idx].endswith(x) for x in std_suffixes])
                 msg = 'The third parameter should correspond to bn moments'
                 assert std_name or std_sfx, msg
-                state_dict = pmu.update_bnorm_moments(name, param_name,
-                                                     self.mcn_net, mod.eps,
-                                                     state_dict)
+                state_dict = pmu.update_bnorm_moments(
+                    name=name,
+                    param_name=param_name,
+                    mcn_net=self.mcn_net,
+                    eps=mod.eps,
+                    state_dict=state_dict
+                )
                 continue
             else:
                 raise ValueError('unexpected number of params')
@@ -405,6 +423,7 @@ class Network(nn.Module):
     def __str__(self):
         return self.transcribe()
 
+
 def simplify_dag(nodes):
     """Simplify unnecessary chains of operations
 
@@ -422,25 +441,30 @@ def simplify_dag(nodes):
         (List): a list of nodes, in which a subset of the operations have
         been simplified.
     """
-    #TODO(samuel): clean up code
     simplified = []
     skip = False
     for prev, node in zip(nodes, nodes[1:]):
-        if isinstance(node['mod'], pmu.Flatten) \
-            and isinstance(prev['mod'], pmu.Permute) \
-            and np.array_equal(prev['mod'].order, [1, 0, 2, 3]): # perform merge
-            new_node = {'name': node['name'], 'inputs': prev['inputs'],
-                        'outputs': node['outputs'], 'mod': pmu.Flatten(),
-                        'params': None}
+        if (isinstance(node["mod"], pmu.Flatten) and
+                isinstance(prev["mod"], pmu.Permute) and
+                np.array_equal(prev["mod"].order, [1, 0, 2, 3])):
+            new_node = {
+                "name": node["name"],
+                "inputs": prev["inputs"],
+                "outputs": node["outputs"],
+                "mod": pmu.Flatten(),
+                "params": None
+            }
             simplified.append(new_node)
             skip = True
-            print('simplifying {}, {}'.format(prev['name'], node['name']))
+            print("simplifying {}, {}".format(prev["name"], node["name"]))
         elif skip:
             skip = False
         else:
             simplified.append(prev)
-    if not skip: simplified.append(node) # handle final node
+    if not skip:
+        simplified.append(node)  # handle final node
     return simplified
+
 
 def prepare_meta(normalization, pt_norm):
     """Prepare the normalization (meta) properties of the converted model
@@ -462,24 +486,19 @@ def prepare_meta(normalization, pt_norm):
     else:
         rgb_std = [1, 1, 1]
     if pt_norm:
-        # TODO(samuel): Implement properly
         raise NotImplementedError('conv scaling not yet implemented')
         conv_sc = {}
         rgb_mean = [0.485, 0.456, 0.406]
         rgb_std = [0.229, 0.224, 0.225]
     else:
         conv_sc = None
-    meta = {'rgb_mean': rgb_mean,
-            'rgb_std': rgb_std,
-            'im_size': im_size}
+    meta = {'rgb_mean': rgb_mean, 'rgb_std': rgb_std, 'im_size': im_size}
     return meta, conv_sc
 
-def build_network(mcn_path, name, flatten_layer, debug_mode, pt_norm, verbose):
-    """Convert a list of dag nodes into an architecture description
 
-    NOTE: We can ensure a valid execution order by exploiting the provided
-    ordering of the stored network. This is because when the dag object is
-    stored or rebuilt, it performs a topological sort on the graph.
+def build_network(mcn_path, name, flatten_layer, debug_mode, pt_norm, verbose,
+        inplace):
+    """Convert a list of dag nodes into an architecture description
 
     Args:
         mcn_path (str): the path to the .mat file containing the matconvnet
@@ -495,17 +514,30 @@ def build_network(mcn_path, name, flatten_layer, debug_mode, pt_norm, verbose):
           standard pytorch normalization values from ImageNet.
         verbose (bool): whether to display more detailed information during the
           conversion process.
+        inplace (bool): whether to convert ReLU modules to run "in place".
 
     Returns:
         (str, dict): A string comprising the generated source code for the
         network description, and a dictionary containing the associated
         netowrk parameters.
+
+    NOTES:
+    We can ensure a valid execution order by exploiting the provided
+    ordering of the stored network. This is because when the dag object is
+    stored or rebuilt, it performs a topological sort on the graph.
+
+    As a convenience, return final embedding together with classifier
+    where possible. This is only performed when flattening occurs at
+    the end of the network, where its fairly obvious how the network has
+    been designed (otherwise, the network definition is probably going to
+    be easier to modify by hand).
+
     """
     mcn_net = load_mcn_net(mcn_path)
     normalization = mcn_net['meta']['normalization']
     meta, _ = prepare_meta(normalization, pt_norm)
     nodes, uses_functional = extract_dag(mcn_net, flatten_layer=flatten_layer,
-                                         verbose=verbose)
+                                         verbose=verbose, inplace=inplace)
     nodes = simplify_dag(nodes)
     state_dict = OrderedDict()
     net = Network(name, mcn_net, meta, uses_functional=uses_functional,
@@ -514,16 +546,11 @@ def build_network(mcn_path, name, flatten_layer, debug_mode, pt_norm, verbose):
         print(ii, node['name'])
         net.add_mod(state_dict=state_dict, **node)
 
-    # As a convenience, return final embedding together with classifier
-    # where possible. This is only performed when flattening occurs at
-    # the end of the network, where its fairly obvious how the network has
-    # been designed (otherwise, the network definition is probably going to
-    # be easier to modify by hand).
     if net.output_vars == ['classifier']:
         if '_preflatten' in nodes[-2]['outputs'][0]:
-            net.output_vars.extend(nodes[-3]['outputs']) # append embedding
-
+            net.output_vars.extend(nodes[-3]['outputs'])  # append embedding
     return net, state_dict
+
 
 def import_model(mcn_model_path, output_dir, refresh, **kwargs):
     """Import matconvnet model to pytorch
@@ -543,10 +570,14 @@ def import_model(mcn_model_path, output_dir, refresh, **kwargs):
         flatten_layer (str): can be either the name of the layer after which
           flattening is performed, or 'last', in which case it is performed at
           the end of the network.
+
+    NOTES:
+        The name of the network is modified to use underscores (to ensure that
+        it is a valid python variable name)
     """
     print('Loading mcn model from {}...'.format(mcn_model_path))
     dest_name = os.path.splitext(os.path.basename(mcn_model_path))[0]
-    dest_name = dest_name.replace('-', '_') # ensure valid python variable name
+    dest_name = dest_name.replace('-', '_')
     arch_def_path = '{}/{}.py'.format(output_dir, dest_name)
     weights_path = '{}/{}.pth'.format(output_dir, dest_name)
     exists = all([os.path.exists(p) for p in [arch_def_path, weights_path]])
@@ -554,7 +585,8 @@ def import_model(mcn_model_path, output_dir, refresh, **kwargs):
         template = 'Found existing imported model at {},{}, skipping...'
         print(template.format(arch_def_path, weights_path))
         return
-    if not os.path.isdir(output_dir): os.makedirs(output_dir)
+    if not os.path.isdir(output_dir):
+        os.makedirs(output_dir)
     net, state_dict = build_network(mcn_model_path, dest_name, **kwargs)
     print('Saving imported model definition to {}'.format(arch_def_path))
     with open(arch_def_path, 'w') as f:
@@ -562,8 +594,9 @@ def import_model(mcn_model_path, output_dir, refresh, **kwargs):
     print('Saving imported weights to {}'.format(weights_path))
     torch.save(state_dict, weights_path)
 
+
 parser = argparse.ArgumentParser(
-                    description='Convert model from MatConvNet to PyTorch.')
+    description='Convert model from MatConvNet to PyTorch.')
 parser.add_argument('mcn_model_path',
                     type=str,
                     help=('The input should be the path to a matconvnet model'
@@ -582,9 +615,11 @@ parser.add_argument('--debug_mode', dest='debug_mode', action='store_true',
                     help='Generate additional code to help with debugging')
 parser.add_argument('--verbose', dest='verbose', action='store_true',
                     help='Prints additional information during converstion')
+parser.add_argument('--inplace', dest='inplace', action='store_true',
+                    help='whether relu modules should run "in place"')
 parser.add_argument('--pt_norm', dest='pt_norm', action='store_true',
                     help=('Scale parameters to use standard PyTorch '
-                           'normalization | Default [False]'))
+                          'normalization | Default [False]'))
 parser.set_defaults(refresh=False)
 parser.set_defaults(debug_mode=False)
 parser.set_defaults(flatten_layer='last')
@@ -597,5 +632,6 @@ opts = {'flatten_layer': parsed.flatten_layer,
         'debug_mode': parsed.debug_mode,
         'refresh': parsed.refresh,
         'pt_norm': parsed.pt_norm,
-        'verbose': parsed.verbose}
+        'verbose': parsed.verbose,
+        'inplace': parsed.inplace}
 import_model(mcn_model_path, output_dir, **opts)

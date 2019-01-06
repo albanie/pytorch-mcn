@@ -73,7 +73,22 @@ function ensure_dags(varargin)
       end
       dag = dagnn.DagNN.fromSimpleNN(net) ;
     else
+      targets = {'layers', 'params'} ;
+      layerTypes = {'name', 'inputs', 'outputs', 'params'} ;
+      for jj = 1:numel(targets)
+        for kk = 1:numel(net.(targets{jj}))
+          name = net.(targets{jj})(kk).name ;
+          if contains(name, ':') || contains(name, '/')
+            updated = strrep(name, ':', '_') ;
+            updated = strrep(updated, '/', '_') ;
+            fprintf('updating layer name %s to %s for model %s\n', ...
+                               name, updated, modelName) ;
+            net.(targets{jj})(kk).name = updated ;
+          end
+        end
+      end
       dag = dagnn.DagNN.loadobj(net) ;
+      keyboard
     end
 
     if any(ismember(dag.getInputs(), 'input'))
